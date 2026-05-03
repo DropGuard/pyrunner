@@ -1,3 +1,4 @@
+#!/usr/bin/env bun
 import { Command } from "commander";
 import { getDb } from "./db";
 import { calculateNextRun } from "./executor";
