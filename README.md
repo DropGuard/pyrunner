@@ -1,5 +1,8 @@
 # @dropguard/pyrunner 🚀
 
+[![npm version](https://img.shields.io/npm/v/@dropguard/pyrunner.svg?style=flat-square)](https://www.npmjs.com/package/@dropguard/pyrunner)
+[![license](https://img.shields.io/npm/l/@dropguard/pyrunner.svg?style=flat-square)](https://github.com/DropGuard/pyrunner/blob/main/LICENSE)
+
 **PyRunner** is a lightweight, cross-platform Python script scheduler powered by **Bun** and **uv**. It allows you to easily schedule, manage, and monitor Python tasks as background services with simple Cron expressions.
 
 ---

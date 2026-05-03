@@ -1,8 +1,23 @@
 {
   "name": "@dropguard/pyrunner",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Lightweight cross-platform Python script scheduler via Bun and uv",
   "license": "MIT",
+  "author": "DropGuard <rememberluo@hotmail.com>",
+  "homepage": "https://github.com/DropGuard/pyrunner#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DropGuard/pyrunner.git"
+  },
+  "keywords": [
+    "python",
+    "scheduler",
+    "cron",
+    "automation",
+    "bun",
+    "uv",
+    "cross-platform"
+  ],
   "main": "bin.js",
   "type": "module",
   "bin": {
