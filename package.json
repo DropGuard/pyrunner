@@ -1,15 +1,16 @@
 {
   "name": "@dropguard/pyrunner",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Lightweight cross-platform Python script scheduler via Bun and uv",
-  "main": "src/cli.ts",
+  "main": "bin.js",
   "type": "module",
   "bin": {
-    "pyrunner": "src/cli.ts"
+    "pyrunner": "bin.js"
   },
   "files": [
     "src",
-    "templates"
+    "templates",
+    "bin.js"
   ],
   "private": false,
   "scripts": {

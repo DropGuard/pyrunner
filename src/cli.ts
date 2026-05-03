@@ -23,7 +23,7 @@ program
   .description("Add a new scheduled task")
   .argument("<name>", "Name of the task")
   .argument("<script>", "Path to the Python script")
-  .argument("<cron>", "Cron expression (e.g., '0 9 * * *')")
+  .argument("[cron]", "Cron expression (e.g., '0 12 * * *')", "0 12 * * *")
   .action((name, script, cron) => {
     const db = getDb();
     const absolutePath = resolve(process.cwd(), script);
