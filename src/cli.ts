@@ -7,6 +7,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { ensureEnv, LOGS_DIR } from "./config";
 import { runDaemon } from "./daemon";
 import { installService, uninstallService } from "./service";
+import pkg from "../package.json" with { type: "json" };
 
 const program = new Command();
 
@@ -16,14 +17,14 @@ ensureEnv();
 program
   .name("pyrunner")
   .description("Lightweight Python script scheduler via uv")
-  .version("0.1.8");
+  .version(pkg.version);
 
 program
   .command("add")
   .description("Add a new scheduled task")
   .argument("<name>", "Name of the task")
   .argument("<script>", "Path to the Python script")
-  .argument("[cron]", "Cron expression (e.g., '0 12 * * *')", "0 12 * * *")
+  .argument("[cron]", "Cron expression (default: '0 12 * * *' - daily at noon)", "0 12 * * *")
   .action((name, script, cron) => {
     const db = getDb();
     const absolutePath = resolve(process.cwd(), script);
@@ -41,7 +42,7 @@ program
         VALUES (?, ?, ?, ?, ?, ?)
       `).run(name, absolutePath, workingDir, cron, nextRun, Date.now());
 
-      console.log(`Task '${name}' added successfully.`);
+      console.log(`Task '${name}' added successfully using cron: '${cron}'`);
       console.log(`Next run: ${new Date(nextRun).toLocaleString()}`);
     } catch (e: any) {
       if (e.message.includes("UNIQUE constraint failed")) {
