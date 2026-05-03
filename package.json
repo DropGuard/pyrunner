@@ -1,0 +1,19 @@
+{
+  "name": "pyrunner",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "build": "bun build --compile src/cli.ts --outfile pyrunner.exe"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "commander": "^14.0.3",
+    "cron-parser": "^5.5.0"
+  }
+}
