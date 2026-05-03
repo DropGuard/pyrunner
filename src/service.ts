@@ -14,17 +14,17 @@ export async function installService() {
   const selfPath = resolve(Bun.main);
   
   let command = "";
-  if (selfPath.endsWith(".ts")) {
-    command = `"${exePath}" run "${selfPath}" daemon`;
+  if (Bun.main.endsWith(".ts")) {
+    command = `"${process.execPath}" run "${Bun.main}" daemon`;
   } else {
-    command = `"${selfPath}" daemon`;
+    command = `"${process.execPath}" daemon`;
   }
 
   switch (platform) {
     case "win32": {
       const startupDir = join(process.env.APPDATA!, "Microsoft\\Windows\\Start Menu\\Programs\\Startup");
       const vbsPath = join(startupDir, "pyrunner-daemon.vbs");
-      const vbsContent = vbsTemplate.replace("{{COMMAND}}", command.replace(/\\/g, "\\\\"));
+      const vbsContent = vbsTemplate.replace("{{COMMAND}}", command.replace(/"/g, '""'));
       writeFileSync(vbsPath, vbsContent);
       console.log(`[Windows] Installed auto-start script at: ${vbsPath}`);
       break;
@@ -33,7 +33,7 @@ export async function installService() {
       const systemdDir = join(homedir(), ".config/systemd/user");
       mkdirSync(systemdDir, { recursive: true });
       const servicePath = join(systemdDir, "pyrunner.service");
-      const serviceContent = systemdTemplate.replace("{{COMMAND}}", command.replace(/"/g, ""));
+      const serviceContent = systemdTemplate.replace("{{COMMAND}}", command);
       writeFileSync(servicePath, serviceContent);
       await $`systemctl --user daemon-reload`;
       await $`systemctl --user enable pyrunner.service`;
@@ -45,7 +45,8 @@ export async function installService() {
       const agentsDir = join(homedir(), "Library/LaunchAgents");
       mkdirSync(agentsDir, { recursive: true });
       const plistPath = join(agentsDir, "com.pyrunner.daemon.plist");
-      const args = command.split(" ").map(arg => `        <string>${arg.replace(/"/g, "")}</string>`).join("\n");
+      const argList = command.match(/"[^"]+"|\S+/g) || [];
+      const args = argList.map(arg => `        <string>${arg.replace(/"/g, "")}</string>`).join("\n");
       const plistContent = plistTemplate.replace("{{ARGUMENTS}}", args);
       writeFileSync(plistPath, plistContent);
       await $`launchctl load ${plistPath}`;
