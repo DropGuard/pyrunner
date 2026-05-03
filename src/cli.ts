@@ -16,7 +16,7 @@ ensureEnv();
 program
   .name("pyrunner")
   .description("Lightweight Python script scheduler via uv")
-  .version("0.1.7");
+  .version("0.1.8");
 
 program
   .command("add")

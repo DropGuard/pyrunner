@@ -1,6 +1,6 @@
 {
   "name": "@dropguard/pyrunner",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Lightweight cross-platform Python script scheduler via Bun and uv",
   "license": "MIT",
   "author": "DropGuard <rememberluo@hotmail.com>",
