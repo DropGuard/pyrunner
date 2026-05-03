@@ -11,13 +11,13 @@ import vbsTemplate from "../templates/pyrunner.vbs" with { type: "text" };
 export async function installService() {
   const platform = process.platform;
   const exePath = resolve(process.execPath);
-  const selfPath = resolve(Bun.main);
+  const mainPath = resolve(Bun.main);
   
   let command = "";
   if (Bun.main.endsWith(".ts")) {
-    command = `"${process.execPath}" run "${Bun.main}" daemon`;
+    command = `"${exePath}" run "${mainPath}" daemon`;
   } else {
-    command = `"${process.execPath}" daemon`;
+    command = `"${exePath}" daemon`;
   }
 
   switch (platform) {
@@ -35,9 +35,9 @@ export async function installService() {
       const servicePath = join(systemdDir, "pyrunner.service");
       const serviceContent = systemdTemplate.replace("{{COMMAND}}", command);
       writeFileSync(servicePath, serviceContent);
-      await $`systemctl --user daemon-reload`;
-      await $`systemctl --user enable pyrunner.service`;
-      await $`systemctl --user start pyrunner.service`;
+      await $`systemctl --user daemon-reload`.quiet();
+      await $`systemctl --user enable pyrunner.service`.quiet();
+      await $`systemctl --user start pyrunner.service`.quiet();
       console.log(`[Linux] Installed and started systemd user service: ${servicePath}`);
       break;
     }
@@ -45,11 +45,19 @@ export async function installService() {
       const agentsDir = join(homedir(), "Library/LaunchAgents");
       mkdirSync(agentsDir, { recursive: true });
       const plistPath = join(agentsDir, "com.pyrunner.daemon.plist");
+      
+      // Improved argument splitting for macOS plist
       const argList = command.match(/"[^"]+"|\S+/g) || [];
-      const args = argList.map(arg => `        <string>${arg.replace(/"/g, "")}</string>`).join("\n");
+      const args = argList
+        .map(arg => {
+          const cleanArg = arg.startsWith('"') && arg.endsWith('"') ? arg.slice(1, -1) : arg;
+          return `        <string>${cleanArg}</string>`;
+        })
+        .join("\n");
+        
       const plistContent = plistTemplate.replace("{{ARGUMENTS}}", args);
       writeFileSync(plistPath, plistContent);
-      await $`launchctl load ${plistPath}`;
+      await $`launchctl load ${plistPath}`.quiet();
       console.log(`[macOS] Installed and loaded LaunchAgent: ${plistPath}`);
       break;
     }
