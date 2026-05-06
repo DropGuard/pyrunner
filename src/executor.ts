@@ -53,19 +53,12 @@ export function calculateNextRun(cron: string): number {
 }
 
 /**
- * Decodes a buffer to string, trying UTF-8 first, then falling back to GBK.
+ * Decodes a buffer to string using UTF-8.
+ * Falls back to lossy decoding if invalid sequences are encountered.
  */
 export function decodeOutput(buffer: Uint8Array): string {
   if (buffer.length === 0) return "";
-  try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(buffer);
-  } catch {
-    try {
-      return new TextDecoder("gbk").decode(buffer);
-    } catch {
-      return new TextDecoder("utf-8", { fatal: false }).decode(buffer);
-    }
-  }
+  return new TextDecoder("utf-8").decode(buffer);
 }
 
 // --- Helper Functions ---

@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "pyrunner",
+      "name": "@dropguard/pyrunner",
       "dependencies": {
         "commander": "^14.0.3",
         "cron-parser": "^5.5.0",
