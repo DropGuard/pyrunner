@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { Command } from "commander";
 import { getDb } from "./db";
-import { calculateNextRun } from "./executor";
+import { calculateNextRun, decodeOutput } from "./executor";
 import { resolve, dirname, join } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
 import { ensureEnv, LOGS_DIR } from "./config";
@@ -161,7 +161,8 @@ program
       return;
     }
 
-    const content = readFileSync(logPath, "utf-8");
+    const buffer = readFileSync(logPath);
+    const content = decodeOutput(buffer);
     const lines = content.trim().split("\n");
     const tailCount = parseInt(options.tail);
     console.log(lines.slice(-tailCount).join("\n"));

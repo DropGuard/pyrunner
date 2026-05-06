@@ -33,8 +33,10 @@ export async function executeJob(job: Job, isCatchup: boolean = false) {
     const nextRun = calculateNextRun(job.cron);
     finalizeJob(job.id!, result.exitCode, nextRun, JobStatus.Idle);
 
-    appendFileSync(logPath, result.stdout);
-    appendFileSync(logPath, result.stderr);
+    const stdout = decodeOutput(result.stdout);
+    const stderr = decodeOutput(result.stderr);
+    appendFileSync(logPath, stdout);
+    appendFileSync(logPath, stderr);
     appendFileSync(logPath, `\n--- RUN FINISHED AT ${new Date().toLocaleString()} WITH EXIT CODE ${result.exitCode} ---\n`);
 
     console.log(`[${new Date().toLocaleString()}] Finished job: ${job.name} (Exit: ${result.exitCode})`);
@@ -50,10 +52,31 @@ export function calculateNextRun(cron: string): number {
   return CronExpressionParser.parse(cron).next().getTime();
 }
 
+/**
+ * Decodes a buffer to string, trying UTF-8 first, then falling back to GBK.
+ */
+export function decodeOutput(buffer: Uint8Array): string {
+  if (buffer.length === 0) return "";
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(buffer);
+  } catch {
+    try {
+      return new TextDecoder("gbk").decode(buffer);
+    } catch {
+      return new TextDecoder("utf-8", { fatal: false }).decode(buffer);
+    }
+  }
+}
+
 // --- Helper Functions ---
 
 async function runProcess(job: Job) {
   return await $`uv run ${job.script_path}`
+    .env({
+      ...process.env,
+      PYTHONUTF8: "1",
+      PYTHONIOENCODING: "utf-8"
+    })
     .cwd(job.working_dir)
     .quiet()
     .nothrow();
