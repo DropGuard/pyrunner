@@ -153,7 +153,7 @@ program
   .command("logs")
   .description("View logs for a task")
   .argument("<name>", "Name of the task")
-  .option("-t, --tail <lines>", "Number of lines to show", "20")
+  .option("-t, --tail <lines>", "Number of lines to show")
   .action((name, options) => {
     const logPath = join(LOGS_DIR, `${name}.log`);
     if (!existsSync(logPath)) {
@@ -164,8 +164,31 @@ program
     const buffer = readFileSync(logPath);
     const content = decodeOutput(buffer);
     const lines = content.trim().split("\n");
-    const tailCount = parseInt(options.tail);
-    console.log(lines.slice(-tailCount).join("\n"));
+
+    if (options.tail) {
+      const tailCount = parseInt(options.tail);
+      if (lines.length > tailCount) {
+        console.log(`... (showing last ${tailCount} of ${lines.length} lines) ...`);
+      }
+      console.log(lines.slice(-tailCount).join("\n"));
+    } else {
+      let startIndex = -1;
+      for (let i = lines.length - 1; i >= 0; i--) {
+        if (lines[i].includes("--- RUN STARTED AT") || lines[i].includes("--- RUN FAILED AT")) {
+          startIndex = i;
+          break;
+        }
+      }
+      
+      if (startIndex !== -1) {
+        if (startIndex > 0) {
+          console.log(`... (showing full logs for the last execution, use -t <number> to see more history) ...`);
+        }
+        console.log(lines.slice(startIndex).join("\n"));
+      } else {
+        console.log(lines.join("\n"));
+      }
+    }
   });
 
 program
