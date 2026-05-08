@@ -101,38 +101,62 @@ program
 
 program
   .command("stop")
-  .description("Stop a running task")
-  .argument("<name>", "Name of the task")
+  .description("Stop running tasks (stops all if no name provided)")
+  .argument("[name]", "Name of the task")
   .action((name) => {
     const db = getDb();
-    const job = db.prepare("SELECT * FROM jobs WHERE name = ?").get(name) as Job | null;
+    
+    if (name) {
+      const job = db.prepare("SELECT * FROM jobs WHERE name = ?").get(name) as Job | null;
 
-    if (!job) {
-      console.error(`Error: Task '${name}' not found.`);
-      process.exit(1);
-    }
+      if (!job) {
+        console.error(`Error: Task '${name}' not found.`);
+        process.exit(1);
+      }
 
-    if (job.status !== "running") {
-      console.log(`Task '${name}' is not currently running.`);
-      return;
-    }
+      if (job.status !== "running") {
+        console.log(`Task '${name}' is not currently running.`);
+        return;
+      }
 
-    if (job.pid) {
-      try {
-        process.kill(job.pid, "SIGTERM");
-        console.log(`Sent stop signal to task '${name}' (PID: ${job.pid}).`);
-      } catch (e: any) {
-        if (e.code === "ESRCH") {
-          console.log(`Process for task '${name}' already exited.`);
-        } else {
-          console.error(`Failed to kill process: ${e.message}`);
+      if (job.pid) {
+        try {
+          process.kill(job.pid, "SIGTERM");
+          console.log(`Sent stop signal to task '${name}' (PID: ${job.pid}).`);
+        } catch (e: any) {
+          if (e.code === "ESRCH") {
+            console.log(`Process for task '${name}' already exited.`);
+          } else {
+            console.error(`Failed to kill process: ${e.message}`);
+          }
         }
       }
-    }
 
-    // Reset state in DB regardless, so the user can try again
-    db.prepare("UPDATE jobs SET status = 'idle', pid = NULL WHERE name = ?").run(name);
-    console.log(`Task '${name}' status reset to idle.`);
+      db.prepare("UPDATE jobs SET status = 'idle', pid = NULL WHERE name = ?").run(name);
+      console.log(`Task '${name}' status reset to idle.`);
+    } else {
+      const runningJobs = db.query("SELECT * FROM jobs WHERE status = 'running'").all() as Job[];
+      
+      if (runningJobs.length === 0) {
+        console.log("No tasks are currently running.");
+        return;
+      }
+
+      console.log(`Stopping ${runningJobs.length} running tasks...`);
+      runningJobs.forEach(job => {
+        if (job.pid) {
+          try {
+            process.kill(job.pid, "SIGTERM");
+            console.log(` - Stopped: ${job.name} (PID: ${job.pid})`);
+          } catch (e) {
+            // Ignore if already dead
+          }
+        }
+      });
+
+      db.prepare("UPDATE jobs SET status = 'idle', pid = NULL WHERE status = 'running'").run();
+      console.log("All running tasks have been stopped.");
+    }
   });
 
 program
