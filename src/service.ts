@@ -26,19 +26,33 @@ export async function installService() {
       const vbsPath = join(startupDir, "pyrunner-daemon.vbs");
       const vbsContent = vbsTemplate.replace("{{COMMAND}}", command.replace(/"/g, '""'));
       writeFileSync(vbsPath, vbsContent);
-      console.log(`[Windows] Installed auto-start script at: ${vbsPath}`);
+      console.log(`[Windows] Registered auto-start script: ${vbsPath}`);
+      
+      const { exitCode } = await $`wscript.exe "${vbsPath}"`.nothrow().quiet();
+      if (exitCode === 0) {
+        console.log("[Windows] Daemon started in background.");
+      } else {
+        console.warn("[Windows] Could not start daemon immediately. It will start automatically on next login.");
+      }
       break;
     }
     case "linux": {
       const systemdDir = join(homedir(), ".config/systemd/user");
       mkdirSync(systemdDir, { recursive: true });
       const servicePath = join(systemdDir, "pyrunner.service");
-      const serviceContent = systemdTemplate.replace("{{COMMAND}}", command);
-      writeFileSync(servicePath, serviceContent);
+      writeFileSync(servicePath, systemdTemplate.replace("{{COMMAND}}", command));
+      console.log(`[Linux] Systemd unit created: ${servicePath}`);
+
       await $`systemctl --user daemon-reload`.quiet();
       await $`systemctl --user enable pyrunner.service`.quiet();
-      await $`systemctl --user start pyrunner.service`.quiet();
-      console.log(`[Linux] Installed and started systemd user service: ${servicePath}`);
+      
+      const { exitCode, stderr } = await $`systemctl --user start pyrunner.service`.nothrow().quiet();
+      if (exitCode === 0) {
+        console.log("[Linux] Systemd service started.");
+      } else {
+        console.error(`[Linux] Failed to start service: ${stderr.toString().trim()}`);
+        console.log("Tip: Try running 'systemctl --user start pyrunner.service' manually.");
+      }
       break;
     }
     case "darwin": {
@@ -46,25 +60,32 @@ export async function installService() {
       mkdirSync(agentsDir, { recursive: true });
       const plistPath = join(agentsDir, "com.pyrunner.daemon.plist");
       
-      // Improved argument splitting for macOS plist
       const argList = command.match(/"[^"]+"|\S+/g) || [];
-      const args = argList
-        .map(arg => {
-          const cleanArg = arg.startsWith('"') && arg.endsWith('"') ? arg.slice(1, -1) : arg;
-          return `        <string>${cleanArg}</string>`;
-        })
-        .join("\n");
+      const args = argList.map(arg => {
+        const cleanArg = arg.startsWith('"') && arg.endsWith('"') ? arg.slice(1, -1) : arg;
+        return `        <string>${cleanArg}</string>`;
+      }).join("\n");
         
-      const plistContent = plistTemplate.replace("{{ARGUMENTS}}", args);
-      writeFileSync(plistPath, plistContent);
-      await $`launchctl load ${plistPath}`.quiet();
-      console.log(`[macOS] Installed and loaded LaunchAgent: ${plistPath}`);
+      writeFileSync(plistPath, plistTemplate.replace("{{ARGUMENTS}}", args));
+      console.log(`[macOS] LaunchAgent created: ${plistPath}`);
+
+      // Unload first to handle re-installs cleanly
+      await $`launchctl unload ${plistPath}`.nothrow().quiet();
+      const { exitCode, stderr } = await $`launchctl load -w ${plistPath}`.nothrow().quiet();
+      
+      if (exitCode === 0) {
+        console.log("[macOS] LaunchAgent loaded and started.");
+      } else {
+        console.error(`[macOS] Failed to load agent: ${stderr.toString().trim()}`);
+        console.log(`Tip: Try running 'launchctl load -w ${plistPath}' manually.`);
+      }
       break;
     }
     default:
-      console.log(`Auto-start installation is not supported on platform: ${platform}`);
+      console.error(`Auto-start installation is not supported on platform: ${platform}`);
+      return;
   }
-  console.log("The daemon will now start automatically.");
+  console.log("Installation complete. The daemon will now manage your tasks.");
 }
 
 export async function uninstallService() {

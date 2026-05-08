@@ -1,18 +1,24 @@
 #!/usr/bin/env bun
 import { Command } from "commander";
-import { getDb } from "./db";
-import { calculateNextRun, decodeOutput } from "./executor";
+import { getDb, type Job } from "./db";
+import { calculateNextRun } from "./executor";
 import { resolve, dirname, join } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
 import { ensureEnv, LOGS_DIR } from "./config";
 import { runDaemon } from "./daemon";
 import { installService, uninstallService } from "./service";
 import pkg from "../package.json" with { type: "json" };
+import { $ } from "bun";
 
 const program = new Command();
 
 // Pre-flight check: ensure environment is ready
 ensureEnv();
+
+// Windows-specific: Force UTF-8 code page to avoid Mojibake
+if (process.platform === "win32") {
+  await $`chcp 65001`.quiet().nothrow();
+}
 
 program
   .name("pyrunner")
@@ -59,7 +65,7 @@ program
   .description("List all scheduled tasks")
   .action(() => {
     const db = getDb();
-    const jobs = db.query("SELECT * FROM jobs").all() as any[];
+    const jobs = db.query("SELECT * FROM jobs").all() as Job[];
 
     if (jobs.length === 0) {
       console.log("No tasks found.");
@@ -94,6 +100,84 @@ program
   });
 
 program
+  .command("stop")
+  .description("Stop a running task")
+  .argument("<name>", "Name of the task")
+  .action((name) => {
+    const db = getDb();
+    const job = db.prepare("SELECT * FROM jobs WHERE name = ?").get(name) as Job | null;
+
+    if (!job) {
+      console.error(`Error: Task '${name}' not found.`);
+      process.exit(1);
+    }
+
+    if (job.status !== "running") {
+      console.log(`Task '${name}' is not currently running.`);
+      return;
+    }
+
+    if (job.pid) {
+      try {
+        process.kill(job.pid, "SIGTERM");
+        console.log(`Sent stop signal to task '${name}' (PID: ${job.pid}).`);
+      } catch (e: any) {
+        if (e.code === "ESRCH") {
+          console.log(`Process for task '${name}' already exited.`);
+        } else {
+          console.error(`Failed to kill process: ${e.message}`);
+        }
+      }
+    }
+
+    // Reset state in DB regardless, so the user can try again
+    db.prepare("UPDATE jobs SET status = 'idle', pid = NULL WHERE name = ?").run(name);
+    console.log(`Task '${name}' status reset to idle.`);
+  });
+
+program
+  .command("run")
+  .description("Execute tasks immediately (runs all idle tasks if no name provided)")
+  .argument("[name]", "Name of the task")
+  .action(async (name) => {
+    const db = getDb();
+    const { executeJob } = await import("./executor");
+
+    if (name) {
+      const job = db.prepare("SELECT * FROM jobs WHERE name = ?").get(name) as Job | null;
+
+      if (!job) {
+        console.error(`Error: Task '${name}' not found.`);
+        process.exit(1);
+      }
+
+      if (job.status === "running") {
+        console.error(`Error: Task '${name}' is already running (PID: ${job.pid}).`);
+        process.exit(1);
+      }
+
+      console.log(`Manually triggering task: ${name}...`);
+      await executeJob(job, false);
+    } else {
+      const jobs = db.query("SELECT * FROM jobs WHERE status != 'running'").all() as Job[];
+      
+      if (jobs.length === 0) {
+        console.log("No idle tasks found to run.");
+        return;
+      }
+
+      console.log(`🚀 Manually triggering ${jobs.length} idle tasks...\n`);
+      // Run all idle jobs in parallel
+      await Promise.all(jobs.map(job => {
+        return executeJob(job, false).catch(err => {
+          console.error(`Error executing task ${job.name}:`, err);
+        });
+      }));
+      console.log("\nAll triggered tasks have completed.");
+    }
+  });
+
+program
   .command("edit")
   .description("Edit an existing task")
   .argument("<name>", "Name of the task")
@@ -101,7 +185,7 @@ program
   .option("-c, --cron <expression>", "New cron expression")
   .action((name, options) => {
     const db = getDb();
-    const job = db.prepare("SELECT * FROM jobs WHERE name = ?").get(name) as any;
+    const job = db.prepare("SELECT * FROM jobs WHERE name = ?").get(name) as Job | null;
 
     if (!job) {
       console.error(`Error: Task '${name}' not found.`);
@@ -151,10 +235,49 @@ program
 
 program
   .command("logs")
-  .description("View logs for a task")
-  .argument("<name>", "Name of the task")
-  .option("-t, --tail <lines>", "Number of lines to show")
+  .description("View the latest execution logs for all tasks, or specify a task name")
+  .argument("[name]", "Task name (optional)")
+  .option("-t, --tail <lines>", "Number of lines to show (only for specific task)")
   .action((name, options) => {
+    const db = getDb();
+    
+    if (!name) {
+      const jobs = db.query("SELECT name FROM jobs").all() as { name: string }[];
+      if (jobs.length === 0) {
+        console.log("No tasks found.");
+        return;
+      }
+
+      console.log("=== Last Execution Logs for All Tasks ===\n");
+      jobs.forEach((job) => {
+        const logPath = join(LOGS_DIR, `${job.name}.log`);
+        if (!existsSync(logPath)) {
+          process.stdout.write(`--- [${job.name}] ---\n(No logs found)\n\n`);
+          return;
+        }
+
+        const buffer = readFileSync(logPath);
+        process.stdout.write(`--- [${job.name}] ---\n`);
+        
+        // Find the last run in the buffer without full string conversion
+        const content = buffer.toString("utf-8");
+        const lines = content.trim().split("\n");
+        let startIndex = -1;
+        for (let i = lines.length - 1; i >= 0; i--) {
+          const line = lines[i];
+          if (line && (line.includes("--- RUN STARTED AT") || line.includes("--- RUN FAILED AT"))) {
+            startIndex = i;
+            break;
+          }
+        }
+        
+        const outputLines = startIndex !== -1 ? lines.slice(startIndex) : lines.slice(-5);
+        // Write the lines as UTF-8 bytes directly
+        process.stdout.write(Buffer.from(outputLines.join("\n") + "\n\n", "utf-8"));
+      });
+      return;
+    }
+
     const logPath = join(LOGS_DIR, `${name}.log`);
     if (!existsSync(logPath)) {
       console.error(`No logs found for task '${name}'.`);
@@ -162,19 +285,20 @@ program
     }
 
     const buffer = readFileSync(logPath);
-    const content = decodeOutput(buffer);
+    const content = buffer.toString("utf-8");
     const lines = content.trim().split("\n");
 
     if (options.tail) {
       const tailCount = parseInt(options.tail);
       if (lines.length > tailCount) {
-        console.log(`... (showing last ${tailCount} of ${lines.length} lines) ...`);
+        process.stdout.write(`... (showing last ${tailCount} of ${lines.length} lines) ...\n`);
       }
-      console.log(lines.slice(-tailCount).join("\n"));
+      process.stdout.write(Buffer.from(lines.slice(-tailCount).join("\n") + "\n", "utf-8"));
     } else {
       let startIndex = -1;
       for (let i = lines.length - 1; i >= 0; i--) {
-        if (lines[i].includes("--- RUN STARTED AT") || lines[i].includes("--- RUN FAILED AT")) {
+        const line = lines[i];
+        if (line && (line.includes("--- RUN STARTED AT") || line.includes("--- RUN FAILED AT"))) {
           startIndex = i;
           break;
         }
@@ -182,11 +306,11 @@ program
       
       if (startIndex !== -1) {
         if (startIndex > 0) {
-          console.log(`... (showing full logs for the last execution, use -t <number> to see more history) ...`);
+          process.stdout.write(`... (showing full logs for the last execution, use -t <number> to see more history) ...\n`);
         }
-        console.log(lines.slice(startIndex).join("\n"));
+        process.stdout.write(Buffer.from(lines.slice(startIndex).join("\n") + "\n", "utf-8"));
       } else {
-        console.log(lines.join("\n"));
+        process.stdout.write(Buffer.from(lines.join("\n") + "\n", "utf-8"));
       }
     }
   });

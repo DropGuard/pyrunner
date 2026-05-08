@@ -3,47 +3,67 @@ import { getDb, type Job, JobStatus } from "./db";
 import { executeJob } from "./executor";
 
 async function tick(isInitial: boolean = false) {
-  const db = getDb();
-  const now = Date.now();
+  try {
+    const db = getDb();
+    const now = Date.now();
 
-  const dueJobs = db.query("SELECT * FROM jobs WHERE next_run_time <= $now AND status != $running").all({ 
-    $now: now,
-    $running: JobStatus.Running 
-  }) as Job[];
+    const dueJobs = db.query("SELECT * FROM jobs WHERE next_run_time <= $now AND status != $running").all({ 
+      $now: now,
+      $running: JobStatus.Running 
+    }) as Job[];
 
-  if (dueJobs.length > 0) {
-    const type = isInitial ? "Catch-up" : "Scheduled";
-    console.log(`[${new Date().toLocaleString()}] [${type}] Found ${dueJobs.length} due jobs.`);
-    for (const job of dueJobs) {
-      executeJob(job, isInitial);
+    if (dueJobs.length > 0) {
+      const type = isInitial ? "Catch-up" : "Scheduled";
+      console.log(`[${new Date().toLocaleString()}] [${type}] Found ${dueJobs.length} due jobs.`);
+      for (const job of dueJobs) {
+        // We don't await executeJob here to allow parallel execution, 
+        // but executeJob itself should handle its own errors.
+        executeJob(job, isInitial).catch(err => {
+          console.error(`[${new Date().toLocaleString()}] Unhandled error in job ${job.name}:`, err);
+        });
+      }
     }
+  } catch (error) {
+    console.error(`[${new Date().toLocaleString()}] Error during daemon tick:`, error);
   }
 }
 
 export async function runDaemon() {
-  ensureEnv();
-  const db = getDb();
-  const allJobs = db.query("SELECT name, cron, next_run_time FROM jobs").all() as any[];
+  try {
+    ensureEnv();
+    const db = getDb();
 
-  console.log("========================================");
-  console.log("       PyRunner Daemon Started");
-  console.log("========================================");
-  console.log(`Time: ${new Date().toLocaleString()}`);
-  console.log(`Monitoring ${allJobs.length} tasks:`);
-  allJobs.forEach(j => {
-    console.log(` - ${j.name.padEnd(15)} [${j.cron}] Next: ${new Date(j.next_run_time).toLocaleString()}`);
-  });
-  console.log("----------------------------------------");
-  
-  // Initial tick for catch-up
-  await tick(true);
+    // Cleanup: Reset any jobs that were left in 'running' state from a previous crash/shutdown
+    const runningJobs = db.query("SELECT * FROM jobs WHERE status = 'running'").all() as Job[];
+    if (runningJobs.length > 0) {
+      console.log(`[${new Date().toLocaleString()}] Cleaning up ${runningJobs.length} stale running tasks...`);
+      db.prepare("UPDATE jobs SET status = 'idle', pid = NULL WHERE status = 'running'").run();
+    }
 
-  // Poll every 30 seconds
-  setInterval(() => tick(false), 30 * 1000);
+    const allJobs = db.query("SELECT name, cron, next_run_time FROM jobs").all() as any[];
+
+    console.log("========================================");
+    console.log("       PyRunner Daemon Started");
+    console.log("========================================");
+    console.log(`Time: ${new Date().toLocaleString()}`);
+    console.log(`Monitoring ${allJobs.length} tasks:`);
+    allJobs.forEach(j => {
+      console.log(` - ${j.name.padEnd(15)} [${j.cron}] Next: ${new Date(j.next_run_time).toLocaleString()}`);
+    });
+    console.log("----------------------------------------");
+    
+    // Initial tick for catch-up
+    await tick(true);
+
+    // Poll every 30 seconds
+    setInterval(() => tick(false), 30 * 1000);
+  } catch (error) {
+    console.error("Failed to start daemon:", error);
+    process.exit(1);
+  }
 }
 
 // If this file is run directly
 if (import.meta.path === Bun.main) {
-  ensureEnv();
   runDaemon();
 }

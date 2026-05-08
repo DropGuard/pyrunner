@@ -1,6 +1,6 @@
 {
   "name": "@dropguard/pyrunner",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "description": "Lightweight cross-platform Python script scheduler via Bun and uv",
   "license": "MIT",
   "author": "DropGuard <rememberluo@hotmail.com>",
@@ -30,7 +30,7 @@
   ],
   "private": false,
   "scripts": {
-    "build": "bun build --compile src/cli.ts --outfile pyrunner.exe",
+    "build": "bun build.ts",
     "test": "bun test"
   },
   "devDependencies": {

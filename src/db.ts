@@ -18,6 +18,7 @@ export interface Job {
   status: JobStatus;
   last_run_time?: number;
   last_exit_code?: number;
+  pid?: number | null;
   created_at: number;
 }
 
@@ -37,6 +38,7 @@ export function getDb() {
         status TEXT DEFAULT 'idle',
         last_run_time INTEGER,
         last_exit_code INTEGER,
+        pid INTEGER,
         created_at INTEGER
       )
     `);

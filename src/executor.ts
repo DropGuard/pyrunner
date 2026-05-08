@@ -1,9 +1,21 @@
-import { $ } from "bun";
 import { join } from "node:path";
 import { appendFileSync, existsSync } from "node:fs";
 import { LOGS_DIR } from "./config";
 import { getDb, type Job, JobStatus } from "./db";
 import { CronExpressionParser } from "cron-parser";
+
+function runProcess(job: Job) {
+  return Bun.spawn(["uv", "run", job.script_path], {
+    env: {
+      ...process.env,
+      PYTHONUTF8: "1",
+      PYTHONIOENCODING: "utf-8"
+    },
+    cwd: job.working_dir,
+    stdout: "pipe",
+    stderr: "pipe"
+  });
+}
 
 /**
  * Main entry point for executing a job.
@@ -27,19 +39,22 @@ export async function executeJob(job: Job, isCatchup: boolean = false) {
 
   try {
     // 3. Execution
-    const result = await runProcess(job);
+    const proc = runProcess(job);
+    updateJobPid(job.id!, proc.pid);
+
+    const exitCode = await proc.exited;
+    const stdout = await new Response(proc.stdout).arrayBuffer();
+    const stderr = await new Response(proc.stderr).arrayBuffer();
 
     // 4. Finalization
     const nextRun = calculateNextRun(job.cron);
-    finalizeJob(job.id!, result.exitCode, nextRun, JobStatus.Idle);
+    finalizeJob(job.id!, exitCode, nextRun, JobStatus.Idle);
 
-    const stdout = decodeOutput(result.stdout);
-    const stderr = decodeOutput(result.stderr);
-    appendFileSync(logPath, stdout);
-    appendFileSync(logPath, stderr);
-    appendFileSync(logPath, `\n--- RUN FINISHED AT ${new Date().toLocaleString()} WITH EXIT CODE ${result.exitCode} ---\n`);
+    appendFileSync(logPath, decodeOutput(new Uint8Array(stdout)));
+    appendFileSync(logPath, decodeOutput(new Uint8Array(stderr)));
+    appendFileSync(logPath, `\n--- RUN FINISHED AT ${new Date().toLocaleString()} WITH EXIT CODE ${exitCode} ---\n`);
 
-    console.log(`[${new Date().toLocaleString()}] Finished job: ${job.name} (Exit: ${result.exitCode})`);
+    console.log(`[${new Date().toLocaleString()}] Finished job: ${job.name} (Exit: ${exitCode})`);
   } catch (error: any) {
     handleExecutionError(job, logPath, error);
   }
@@ -53,30 +68,26 @@ export function calculateNextRun(cron: string): number {
 }
 
 /**
- * Decodes a buffer to string using UTF-8.
- * Falls back to GBK decoding if invalid sequences are encountered (common on Windows).
+ * Decodes a buffer to string using an intelligent fallback.
+ * Checks for valid UTF-8 sequences; if invalid, assumes GBK (common on Windows).
  */
 export function decodeOutput(buffer: Uint8Array): string {
   if (buffer.length === 0) return "";
+
+  // Try UTF-8 first
+  const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
   try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(buffer);
+    return utf8Decoder.decode(buffer);
   } catch (e) {
-    return new TextDecoder("gbk").decode(buffer);
+    // Fall back to GBK
+    try {
+      // @ts-expect-error - "gbk" is supported by Bun/Node but might not be in the standard Encoding type
+      return new TextDecoder("gbk").decode(buffer);
+    } catch (e2) {
+      // Last resort fallback
+      return new TextDecoder("utf-8", { fatal: false }).decode(buffer);
+    }
   }
-}
-
-// --- Helper Functions ---
-
-async function runProcess(job: Job) {
-  return await $`uv run ${job.script_path}`
-    .env({
-      ...process.env,
-      PYTHONUTF8: "1",
-      PYTHONIOENCODING: "utf-8"
-    })
-    .cwd(job.working_dir)
-    .quiet()
-    .nothrow();
 }
 
 function updateJobState(id: number, status: JobStatus, lastRun?: number) {
@@ -88,9 +99,13 @@ function updateJobState(id: number, status: JobStatus, lastRun?: number) {
   }
 }
 
+function updateJobPid(id: number, pid: number | null) {
+  getDb().prepare("UPDATE jobs SET pid = ? WHERE id = ?").run(pid, id);
+}
+
 function finalizeJob(id: number, exitCode: number, nextRun: number, status: JobStatus) {
   getDb()
-    .prepare("UPDATE jobs SET status = ?, last_exit_code = ?, next_run_time = ? WHERE id = ?")
+    .prepare("UPDATE jobs SET status = ?, last_exit_code = ?, next_run_time = ?, pid = NULL WHERE id = ?")
     .run(status, exitCode, nextRun, id);
 }
 
