@@ -13,44 +13,40 @@ export async function installService() {
 
   let finalCommand = "";
 
-  // Strategy 1: If we are running from a globally installed bin (likely in node_modules/.bin or /usr/local/bin)
+  // Strategy: Determine the command based on the currently running process
+  // This is the most reliable way as it's exactly what the user is interacting with.
   const mainPath = resolve(Bun.main);
   const exePath = resolve(process.execPath);
   
+  // We check if we're running from a likely global installation directory
   const isGlobalCandidate =
     mainPath.includes("node_modules") ||
     mainPath.includes("scoop") ||
     (platform !== "win32" && (mainPath.includes("/bin/") || mainPath.includes("/usr/local/")));
 
-  if (isGlobalCandidate && !Bun.main.endsWith(".ts")) {
+  // Avoid installing services pointing to .ts files (source code) or temporary npx paths
+  const isDevOrTemp = mainPath.endsWith(".ts") || mainPath.includes("_npx") || mainPath.includes("temp");
+
+  if (!isDevOrTemp) {
     if (mainPath.endsWith(".js")) {
+      // For JS files, we use the absolute path to the JS prefixed by the executor (bun)
+      // This bypasses any Shell/CMD wrapper issues.
       finalCommand = `"${exePath}" "${mainPath}" daemon`;
     } else {
-      // On Unix, the bin is often a symlink to the JS file, but sometimes it's a wrapper
-      finalCommand = platform === "win32" ? `"${mainPath}" daemon` : `pyrunner daemon`;
+      // If it's a binary executable (compiled bun), use it directly
+      finalCommand = `"${mainPath}" daemon`;
     }
-  } else {
-    // Strategy 2: Try to find 'pyrunner' in the system PATH
-    try {
-      const checkCmd = platform === "win32" ? "where.exe pyrunner" : "which -a pyrunner";
-      const { stdout } = await $`${{ raw: checkCmd }}`.quiet();
-      const paths = stdout.toString().trim().split("\n");
-      const globalCmd = paths.find((p) => {
-        const lowP = p.toLowerCase();
-        return !p.includes(process.cwd()) && !lowP.includes("_npx") && !lowP.includes("temp");
-      });
-      if (globalCmd) {
-        finalCommand = `"${globalCmd.trim()}" daemon`;
-      }
-    } catch (e) {}
   }
 
   if (!finalCommand) {
     console.error(
-      "\x1b[31m[Error] Cannot install background service: Global installation not found.\x1b[0m",
+      "\x1b[31m[Error] Cannot install background service: Stable installation not detected.\x1b[0m",
     );
     console.error(
       "[Tip] Please install pyrunner globally first: \x1b[36mnpm install -g @dropguard/pyrunner\x1b[0m",
+    );
+    console.error(
+      "[Note] You are currently running from: " + mainPath,
     );
     throw new Error("Global installation required for service installation.");
   }
