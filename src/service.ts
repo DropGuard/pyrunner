@@ -11,59 +11,46 @@ import vbsTemplate from "../templates/pyrunner.vbs" with { type: "text" };
 export async function installService() {
   const platform = process.platform;
 
-  // Try to find a stable global 'pyrunner' command in the system PATH
-  let globalCmd = "";
-  try {
-    const checkCmd =
-      platform === "win32" ? "where.exe pyrunner" : "which -a pyrunner";
-    const { stdout } = await $`${{ raw: checkCmd }}`.quiet();
-    const paths = stdout.toString().trim().split("\n");
+  let finalCommand = "";
 
-    // Filter out the current directory and any development/temp paths
-    globalCmd =
-      paths.find((p) => {
-        const lowP = p.toLowerCase();
-        return (
-          !p.includes(process.cwd()) &&
-          !lowP.includes("_npx") &&
-          !lowP.includes("npm-cache") &&
-          !lowP.includes("temp")
-        );
-      }) || "";
-  } catch (e) {
-    // Command not found in PATH
-  }
-
-  // If we can't find a global command, and the current execution is also not a candidate for global
+  // Strategy 1: If we are running from a globally installed bin (likely in node_modules/.bin or /usr/local/bin)
   const mainPath = resolve(Bun.main);
+  const exePath = resolve(process.execPath);
+  
   const isGlobalCandidate =
     mainPath.includes("node_modules") ||
     mainPath.includes("scoop") ||
-    (platform !== "win32" &&
-      (mainPath.includes("/bin/") || mainPath.includes("/usr/local/")));
+    (platform !== "win32" && (mainPath.includes("/bin/") || mainPath.includes("/usr/local/")));
 
-  const exePath = resolve(process.execPath);
-  let finalCommand = "";
-
-  if (globalCmd) {
-    finalCommand = `"${globalCmd.trim()}" daemon`;
-  } else if (isGlobalCandidate && !Bun.main.endsWith(".ts")) {
-    // If it's a JS file, we MUST prefix it with the executor (bun) to avoid Windows association prompts
+  if (isGlobalCandidate && !Bun.main.endsWith(".ts")) {
     if (mainPath.endsWith(".js")) {
       finalCommand = `"${exePath}" "${mainPath}" daemon`;
     } else {
-      finalCommand =
-        platform === "win32" ? `"${mainPath}" daemon` : `pyrunner daemon`;
+      // On Unix, the bin is often a symlink to the JS file, but sometimes it's a wrapper
+      finalCommand = platform === "win32" ? `"${mainPath}" daemon` : `pyrunner daemon`;
     }
   } else {
+    // Strategy 2: Try to find 'pyrunner' in the system PATH
+    try {
+      const checkCmd = platform === "win32" ? "where.exe pyrunner" : "which -a pyrunner";
+      const { stdout } = await $`${{ raw: checkCmd }}`.quiet();
+      const paths = stdout.toString().trim().split("\n");
+      const globalCmd = paths.find((p) => {
+        const lowP = p.toLowerCase();
+        return !p.includes(process.cwd()) && !lowP.includes("_npx") && !lowP.includes("temp");
+      });
+      if (globalCmd) {
+        finalCommand = `"${globalCmd.trim()}" daemon`;
+      }
+    } catch (e) {}
+  }
+
+  if (!finalCommand) {
     console.error(
       "\x1b[31m[Error] Cannot install background service: Global installation not found.\x1b[0m",
     );
     console.error(
       "[Tip] Please install pyrunner globally first: \x1b[36mnpm install -g @dropguard/pyrunner\x1b[0m",
-    );
-    console.error(
-      "[Note] Background services must point to a stable global path, not a source or temporary directory.",
     );
     throw new Error("Global installation required for service installation.");
   }

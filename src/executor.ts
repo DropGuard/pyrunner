@@ -1,5 +1,6 @@
 import { join } from "node:path";
-import { appendFileSync, existsSync } from "node:fs";
+import { existsSync } from "node:fs";
+import { appendFile } from "node:fs/promises";
 import { LOGS_DIR } from "./config";
 import { type Job, JobStatus } from "./db";
 import { type Database } from "bun:sqlite";
@@ -40,7 +41,7 @@ export async function executeJob(db: Database, job: Job, isCatchup: boolean = fa
 
   // 2. Preparation
   updateJobState(db, job.id!, JobStatus.Running, startTime);
-  appendFileSync(
+  await appendFile(
     logPath,
     `\n--- RUN STARTED AT ${new Date(startTime).toLocaleString()} ---\n`,
   );
@@ -57,7 +58,7 @@ export async function executeJob(db: Database, job: Job, isCatchup: boolean = fa
     timeoutTimer = setTimeout(() => {
       console.warn(`[${new Date().toLocaleString()}] Job ${job.name} timed out after ${timeoutMs / 1000}s. Killing...`);
       proc.kill();
-      appendFileSync(logPath, `\nERROR: Job timed out after ${timeoutMs / 1000}s and was killed.\n`);
+      appendFile(logPath, `\nERROR: Job timed out after ${timeoutMs / 1000}s and was killed.\n`).catch(() => {});
     }, timeoutMs);
 
     // Streaming stdout/stderr to file
@@ -67,8 +68,7 @@ export async function executeJob(db: Database, job: Job, isCatchup: boolean = fa
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
-          // Standard Node-style append is more reliable for simple logging
-          appendFileSync(logPath, value);
+          await appendFile(logPath, value);
         }
       } finally {
         reader.releaseLock();
@@ -134,7 +134,7 @@ function finalizeJob(
   ).run(status, exitCode, nextRun, id);
 }
 
-function handleMissingScript(
+async function handleMissingScript(
   db: Database,
   job: Job,
   logPath: string,
@@ -142,10 +142,10 @@ function handleMissingScript(
   baseTime: number,
 ) {
   const errorMsg = `Error: Script not found at ${job.script_path}`;
-  appendFileSync(
+  await appendFile(
     logPath,
     `\n--- RUN FAILED AT ${new Date(startTime).toLocaleString()} ---\n${errorMsg}\n`,
-  );
+  ).catch(() => {});
 
   const nextRun = calculateNextRun(job.cron, baseTime);
   db.prepare(
@@ -157,7 +157,7 @@ function handleMissingScript(
   );
 }
 
-function handleExecutionError(
+async function handleExecutionError(
   db: Database,
   job: Job,
   logPath: string,
@@ -165,10 +165,10 @@ function handleExecutionError(
   baseTime: number,
 ) {
   const endTime = Date.now();
-  appendFileSync(
+  await appendFile(
     logPath,
     `\n--- RUN FAILED AT ${new Date(endTime).toLocaleString()} ---\nERROR: ${error.message}\n`,
-  );
+  ).catch(() => {});
 
   const nextRun = calculateNextRun(job.cron, baseTime);
   db.prepare("UPDATE jobs SET status = ?, next_run_time = ? WHERE id = ?")

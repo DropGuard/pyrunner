@@ -9,8 +9,12 @@ import * as actions from "./actions";
 
 const program = new Command();
 
-// Pre-flight check: ensure environment is ready
-ensureEnv();
+// Windows-specific: Force UTF-8 code page to avoid Mojibake
+async function setupWindowsEncoding() {
+  if (process.platform === "win32") {
+    await $`chcp 65001`.quiet().nothrow();
+  }
+}
 
 // Check for required dependencies: bun and uv
 async function checkRequirements() {
@@ -41,20 +45,21 @@ async function checkRequirements() {
   }
 }
 
-await checkRequirements();
-
-// Windows-specific: Force UTF-8 code page to avoid Mojibake
-if (process.platform === "win32") {
-  await $`chcp 65001`.quiet().nothrow();
-}
-
 // Global DB instance for CLI actions
 const db = createDb();
 
 program
   .name("pyrunner")
   .description("Lightweight Python script scheduler via uv")
-  .version(pkg.version);
+  .version(pkg.version)
+  .hook("preAction", async (thisCommand, actionCommand) => {
+    // Skip checks for help/version
+    if (["help", "version"].includes(actionCommand.name())) return;
+
+    ensureEnv();
+    await checkRequirements();
+    await setupWindowsEncoding();
+  });
 
 program
   .command("add")

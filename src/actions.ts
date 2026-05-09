@@ -62,7 +62,7 @@ export function listJobs(db: Database) {
         Name: j.name,
         Status: j.status + (scriptExists ? "" : " (MISSING)"),
         Cron: j.cron,
-        Timeout: j.timeout + "s",
+        Timeout: (j.timeout ?? 600) + "s",
         "Next Run": new Date(j.next_run_time).toLocaleString(),
         "Last Run": j.last_run_time
           ? new Date(j.last_run_time).toLocaleString()

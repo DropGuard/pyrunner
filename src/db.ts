@@ -34,24 +34,51 @@ export function createDb(path: string = DB_PATH): Database {
   d.run("PRAGMA journal_mode = WAL");
   d.run("PRAGMA synchronous = NORMAL");
 
+  // Initial schema (basic structure)
   d.run(`
     CREATE TABLE IF NOT EXISTS jobs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT UNIQUE,
-      script_path TEXT,
-      working_dir TEXT,
-      cron TEXT,
-      timeout INTEGER DEFAULT 600,
-      next_run_time INTEGER,
-      status TEXT DEFAULT 'idle',
-      last_run_time INTEGER,
-      last_exit_code INTEGER,
-      pid INTEGER,
       created_at INTEGER
     )
   `);
+
+  // Migration logic (Must run BEFORE creating indexes on new columns)
+  const currentVersion = d.prepare("PRAGMA user_version").get() as { user_version: number };
+  const targetVersion = 1;
+
+  if (currentVersion.user_version < targetVersion) {
+    const tableInfo = d.prepare("PRAGMA table_info(jobs)").all() as any[];
+    const columns = tableInfo.map(c => c.name);
+
+    const requiredColumns = [
+      { name: "script_path", type: "TEXT" },
+      { name: "working_dir", type: "TEXT" },
+      { name: "cron", type: "TEXT" },
+      { name: "timeout", type: "INTEGER DEFAULT 600" },
+      { name: "next_run_time", type: "INTEGER" },
+      { name: "status", type: "TEXT DEFAULT 'idle'" },
+      { name: "last_run_time", type: "INTEGER" },
+      { name: "last_exit_code", type: "INTEGER" },
+      { name: "pid", type: "INTEGER" },
+    ];
+
+    for (const col of requiredColumns) {
+      if (!columns.includes(col.name)) {
+        d.run(`ALTER TABLE jobs ADD COLUMN ${col.name} ${col.type}`);
+      }
+    }
+
+    // Data fix: Ensure all existing jobs have a timeout
+    d.run("UPDATE jobs SET timeout = 600 WHERE timeout IS NULL");
+    
+    d.run(`PRAGMA user_version = ${targetVersion}`);
+  }
+
+  // Now safe to create indexes and tables that depend on migrated schema
   d.run("CREATE INDEX IF NOT EXISTS idx_jobs_next_run ON jobs (next_run_time)");
   d.run("CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs (status)");
+
   d.run(`
     CREATE TABLE IF NOT EXISTS system_stats (
       key TEXT PRIMARY KEY,
@@ -59,9 +86,6 @@ export function createDb(path: string = DB_PATH): Database {
       updated_at INTEGER
     )
   `);
-  d.prepare(
-    "INSERT OR IGNORE INTO system_stats (key, value, updated_at) VALUES (?, ?, ?)",
-  ).run("daemon_heartbeat", "running", Date.now());
 
   return d;
 }
