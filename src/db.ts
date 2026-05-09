@@ -5,7 +5,7 @@ export enum JobStatus {
   Idle = "idle",
   Running = "running",
   Failed = "failed",
-  MissingScript = "missing_script"
+  MissingScript = "missing_script",
 }
 
 export interface Job {
@@ -49,7 +49,9 @@ export function getDb() {
         updated_at INTEGER
       )
     `);
-    db.prepare("INSERT OR IGNORE INTO system_stats (key, value, updated_at) VALUES (?, ?, ?)").run("daemon_heartbeat", "running", Date.now());
+    db.prepare(
+      "INSERT OR IGNORE INTO system_stats (key, value, updated_at) VALUES (?, ?, ?)",
+    ).run("daemon_heartbeat", "running", Date.now());
   }
   return db;
 }

@@ -4,7 +4,6 @@ import { calculateNextRun } from "../src/executor";
 import { ensureEnv, PYRUNNER_DIR } from "../src/config";
 import { Database } from "bun:sqlite";
 
-
 describe("PyRunner Core", () => {
   beforeAll(() => {
     ensureEnv();
@@ -18,7 +17,11 @@ describe("PyRunner Core", () => {
     const db = getDb();
     expect(db).toBeInstanceOf(Database);
 
-    const tables = db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='jobs'").all();
+    const tables = db
+      .query(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='jobs'",
+      )
+      .all();
     expect(tables.length).toBe(1);
   });
 
@@ -37,21 +40,30 @@ describe("PyRunner Core", () => {
     const jobName = "test_unit_job";
 
     // Create
-    db.prepare("INSERT INTO jobs (name, script_path, working_dir, cron, next_run_time, created_at) VALUES (?, ?, ?, ?, ?, ?)")
-      .run(jobName, "/tmp/test.py", "/tmp", "* * * * *", Date.now(), Date.now());
+    db.prepare(
+      "INSERT INTO jobs (name, script_path, working_dir, cron, next_run_time, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+    ).run(jobName, "/tmp/test.py", "/tmp", "* * * * *", Date.now(), Date.now());
 
-    const job = db.query("SELECT * FROM jobs WHERE name = ?").get(jobName) as any;
+    const job = db
+      .query("SELECT * FROM jobs WHERE name = ?")
+      .get(jobName) as any;
     expect(job).toBeDefined();
     expect(job.name).toBe(jobName);
 
     // Update status
-    db.prepare("UPDATE jobs SET status = 'running' WHERE name = ?").run(jobName);
-    const updatedJob = db.query("SELECT * FROM jobs WHERE name = ?").get(jobName) as any;
+    db.prepare("UPDATE jobs SET status = 'running' WHERE name = ?").run(
+      jobName,
+    );
+    const updatedJob = db
+      .query("SELECT * FROM jobs WHERE name = ?")
+      .get(jobName) as any;
     expect(updatedJob.status).toBe("running");
 
     // Delete
     db.prepare("DELETE FROM jobs WHERE name = ?").run(jobName);
-    const deletedJob = db.query("SELECT * FROM jobs WHERE name = ?").get(jobName);
+    const deletedJob = db
+      .query("SELECT * FROM jobs WHERE name = ?")
+      .get(jobName);
     expect(deletedJob).toBeNull();
   });
 });

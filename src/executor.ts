@@ -9,11 +9,11 @@ function runProcess(job: Job) {
     env: {
       ...process.env,
       PYTHONUTF8: "1",
-      PYTHONIOENCODING: "utf-8"
+      PYTHONIOENCODING: "utf-8",
     },
     cwd: job.working_dir,
     stdout: "pipe",
-    stderr: "pipe"
+    stderr: "pipe",
   });
 }
 
@@ -26,7 +26,9 @@ export async function executeJob(job: Job, isCatchup: boolean = false) {
   const startTime = Date.now();
   const runType = isCatchup ? "Catch-up" : "Scheduled";
 
-  console.log(`[${new Date().toLocaleString()}] [${runType}] Starting job: ${job.name}`);
+  console.log(
+    `[${new Date().toLocaleString()}] [${runType}] Starting job: ${job.name}`,
+  );
 
   // 1. Validation
   if (!existsSync(job.script_path)) {
@@ -35,7 +37,10 @@ export async function executeJob(job: Job, isCatchup: boolean = false) {
 
   // 2. Preparation
   updateJobState(job.id!, JobStatus.Running, startTime);
-  appendFileSync(logPath, `\n--- RUN STARTED AT ${new Date(startTime).toLocaleString()} ---\n`);
+  appendFileSync(
+    logPath,
+    `\n--- RUN STARTED AT ${new Date(startTime).toLocaleString()} ---\n`,
+  );
 
   try {
     // 3. Execution
@@ -52,9 +57,14 @@ export async function executeJob(job: Job, isCatchup: boolean = false) {
 
     appendFileSync(logPath, decodeOutput(new Uint8Array(stdout)));
     appendFileSync(logPath, decodeOutput(new Uint8Array(stderr)));
-    appendFileSync(logPath, `\n--- RUN FINISHED AT ${new Date().toLocaleString()} WITH EXIT CODE ${exitCode} ---\n`);
+    appendFileSync(
+      logPath,
+      `\n--- RUN FINISHED AT ${new Date().toLocaleString()} WITH EXIT CODE ${exitCode} ---\n`,
+    );
 
-    console.log(`[${new Date().toLocaleString()}] Finished job: ${job.name} (Exit: ${exitCode})`);
+    console.log(
+      `[${new Date().toLocaleString()}] Finished job: ${job.name} (Exit: ${exitCode})`,
+    );
   } catch (error: any) {
     handleExecutionError(job, logPath, error);
   }
@@ -93,7 +103,9 @@ export function decodeOutput(buffer: Uint8Array): string {
 function updateJobState(id: number, status: JobStatus, lastRun?: number) {
   const db = getDb();
   if (lastRun) {
-    db.prepare("UPDATE jobs SET status = ?, last_run_time = ? WHERE id = ?").run(status, lastRun, id);
+    db.prepare(
+      "UPDATE jobs SET status = ?, last_run_time = ? WHERE id = ?",
+    ).run(status, lastRun, id);
   } else {
     db.prepare("UPDATE jobs SET status = ? WHERE id = ?").run(status, id);
   }
@@ -103,28 +115,48 @@ function updateJobPid(id: number, pid: number | null) {
   getDb().prepare("UPDATE jobs SET pid = ? WHERE id = ?").run(pid, id);
 }
 
-function finalizeJob(id: number, exitCode: number, nextRun: number, status: JobStatus) {
+function finalizeJob(
+  id: number,
+  exitCode: number,
+  nextRun: number,
+  status: JobStatus,
+) {
   getDb()
-    .prepare("UPDATE jobs SET status = ?, last_exit_code = ?, next_run_time = ?, pid = NULL WHERE id = ?")
+    .prepare(
+      "UPDATE jobs SET status = ?, last_exit_code = ?, next_run_time = ?, pid = NULL WHERE id = ?",
+    )
     .run(status, exitCode, nextRun, id);
 }
 
 function handleMissingScript(job: Job, logPath: string, startTime: number) {
   const errorMsg = `Error: Script not found at ${job.script_path}`;
-  appendFileSync(logPath, `\n--- RUN FAILED AT ${new Date(startTime).toLocaleString()} ---\n${errorMsg}\n`);
+  appendFileSync(
+    logPath,
+    `\n--- RUN FAILED AT ${new Date(startTime).toLocaleString()} ---\n${errorMsg}\n`,
+  );
 
   const nextRun = calculateNextRun(job.cron);
   getDb()
-    .prepare("UPDATE jobs SET status = ?, last_run_time = ?, next_run_time = ? WHERE id = ?")
+    .prepare(
+      "UPDATE jobs SET status = ?, last_run_time = ?, next_run_time = ? WHERE id = ?",
+    )
     .run(JobStatus.MissingScript, startTime, nextRun, job.id!);
 
-  console.error(`[${new Date().toLocaleString()}] Job failed: ${job.name} - Script missing`);
+  console.error(
+    `[${new Date().toLocaleString()}] Job failed: ${job.name} - Script missing`,
+  );
 }
 
 function handleExecutionError(job: Job, logPath: string, error: any) {
   const endTime = Date.now();
-  appendFileSync(logPath, `\n--- RUN FAILED AT ${new Date(endTime).toLocaleString()} ---\nERROR: ${error.message}\n`);
+  appendFileSync(
+    logPath,
+    `\n--- RUN FAILED AT ${new Date(endTime).toLocaleString()} ---\nERROR: ${error.message}\n`,
+  );
 
   updateJobState(job.id!, JobStatus.Failed);
-  console.error(`[${new Date().toLocaleString()}] Job failed: ${job.name}`, error);
+  console.error(
+    `[${new Date().toLocaleString()}] Job failed: ${job.name}`,
+    error,
+  );
 }
