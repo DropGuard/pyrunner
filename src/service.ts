@@ -36,13 +36,18 @@ export async function installService() {
                             mainPath.includes("scoop") || 
                             (platform !== "win32" && (mainPath.includes("/bin/") || mainPath.includes("/usr/local/")));
 
+  const exePath = resolve(process.execPath);
   let finalCommand = "";
 
   if (globalCmd) {
     finalCommand = `"${globalCmd.trim()}" daemon`;
   } else if (isGlobalCandidate && !Bun.main.endsWith(".ts")) {
-    // If we are running from what looks like a global bin but 'where/which' didn't pick it up
-    finalCommand = platform === "win32" ? `"${mainPath}" daemon` : `pyrunner daemon`;
+    // If it's a JS file, we MUST prefix it with the executor (bun) to avoid Windows association prompts
+    if (mainPath.endsWith(".js")) {
+      finalCommand = `"${exePath}" "${mainPath}" daemon`;
+    } else {
+      finalCommand = platform === "win32" ? `"${mainPath}" daemon` : `pyrunner daemon`;
+    }
   } else {
     console.error("\x1b[31m[Error] Cannot install background service: Global installation not found.\x1b[0m");
     console.error("[Tip] Please install pyrunner globally first: \x1b[36mnpm install -g @dropguard/pyrunner\x1b[0m");
