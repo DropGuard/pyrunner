@@ -15,6 +15,27 @@ const program = new Command();
 // Pre-flight check: ensure environment is ready
 ensureEnv();
 
+// Check for required dependencies: bun and uv
+async function checkRequirements() {
+  const dependencies = [
+    { name: "bun", command: "bun --version", hint: "Install Bun from https://bun.sh" },
+    { name: "uv", command: "uv --version", hint: "Install uv via: curl -LsSf https://astral.sh/uv/install.sh | sh (or visit https://astral.sh/uv)" }
+  ];
+
+  for (const dep of dependencies) {
+    try {
+      const { exitCode } = await $`${{ raw: dep.command }}`.quiet().nothrow();
+      if (exitCode !== 0) throw new Error();
+    } catch (e) {
+      console.error(`\x1b[31m[Error] Required dependency '${dep.name}' not found.\x1b[0m`);
+      console.error(`[Tip] ${dep.hint}\n`);
+      process.exit(1);
+    }
+  }
+}
+
+await checkRequirements();
+
 // Windows-specific: Force UTF-8 code page to avoid Mojibake
 if (process.platform === "win32") {
   await $`chcp 65001`.quiet().nothrow();

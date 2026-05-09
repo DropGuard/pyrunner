@@ -4,7 +4,7 @@ import { mkdirSync } from "node:fs";
 
 export const PYRUNNER_DIR = join(homedir(), ".pyrunner");
 export const LOGS_DIR = join(PYRUNNER_DIR, "logs");
-export const DB_PATH = join(PYRUNNER_DIR, "jobs.sqlite");
+export const DB_PATH = process.env.PYRUNNER_DB_PATH || join(PYRUNNER_DIR, "jobs.sqlite");
 
 export function ensureEnv() {
   mkdirSync(PYRUNNER_DIR, { recursive: true });
