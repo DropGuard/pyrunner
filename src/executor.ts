@@ -4,7 +4,7 @@ import { appendFile } from "node:fs/promises";
 import { LOGS_DIR } from "./config";
 import { type Job, JobStatus } from "./db";
 import { type Database } from "bun:sqlite";
-import { calculateNextRun } from "./utils";
+import { calculateNextRun, decodeOutput } from "./utils";
 
 function runProcess(job: Job) {
   return Bun.spawn(["uv", "run", job.script_path], {
@@ -68,7 +68,9 @@ export async function executeJob(db: Database, job: Job, isCatchup: boolean = fa
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
-          await appendFile(logPath, value);
+          // Decode to string first to ensure the log file is unified UTF-8
+          const text = decodeOutput(value);
+          await appendFile(logPath, text);
         }
       } finally {
         reader.releaseLock();
@@ -98,7 +100,7 @@ export async function executeJob(db: Database, job: Job, isCatchup: boolean = fa
     );
   } catch (error) {
     if (timeoutTimer) clearTimeout(timeoutTimer);
-    handleExecutionError(
+    await handleExecutionError(
       db,
       job,
       logPath,
@@ -173,13 +175,6 @@ async function handleExecutionError(
   const nextRun = calculateNextRun(job.cron, baseTime);
   db.prepare("UPDATE jobs SET status = ?, next_run_time = ? WHERE id = ?")
     .run(JobStatus.Failed, nextRun, job.id!);
-
-  console.error(
-    `[${new Date().toLocaleString()}] Job failed: ${job.name}`,
-    error,
-  );
-}
-xtRun, job.id!);
 
   console.error(
     `[${new Date().toLocaleString()}] Job failed: ${job.name}`,

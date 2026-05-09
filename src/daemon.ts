@@ -7,11 +7,14 @@ export async function tick(db: Database, isInitial: boolean = false) {
   try {
     const now = Date.now();
 
-    // Update heartbeat
-    db.prepare("UPDATE system_stats SET updated_at = ? WHERE key = ?").run(
-      now,
-      "daemon_heartbeat",
-    );
+    // Update heartbeat only once every 30 seconds to reduce disk I/O
+    const lastHeartbeat = db.prepare("SELECT updated_at FROM system_stats WHERE key = ?").get("daemon_heartbeat") as { updated_at: number } | null;
+    if (!lastHeartbeat || now - lastHeartbeat.updated_at >= 30000) {
+      db.prepare("UPDATE system_stats SET updated_at = ? WHERE key = ?").run(
+        now,
+        "daemon_heartbeat",
+      );
+    }
 
     const dueJobs = db
       .query(
@@ -88,7 +91,7 @@ export async function runDaemon() {
     // Initial tick for catch-up
     await tick(db, true);
 
-    // Poll every 30 seconds using a safer recursive timeout
+    // Poll using a safer recursive timeout
     let tickTimer: Timer | null = null;
     const scheduleNextTick = () => {
       tickTimer = setTimeout(async () => {
@@ -133,8 +136,5 @@ export async function runDaemon() {
 
 // If this file is run directly
 if (import.meta.path === Bun.main) {
-  runDaemon();
-}
-n) {
   runDaemon();
 }
