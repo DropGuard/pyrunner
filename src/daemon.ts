@@ -59,10 +59,6 @@ export async function runDaemon() {
     ensureEnv();
     const db = createDb();
 
-    // Record daemon PID for liveness detection
-    db.prepare("INSERT OR REPLACE INTO system_stats (key, value, updated_at) VALUES (?, ?, ?)")
-      .run("daemon_pid", process.pid.toString(), Date.now());
-
     // Cleanup stale running tasks
     const runningJobs = db
       .query("SELECT * FROM jobs WHERE status = 'running'")

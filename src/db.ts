@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
-import { DB_PATH, HEARTBEAT_THRESHOLD } from "./config";
+import { DB_PATH } from "./config";
+import { execSync } from "node:child_process";
 
 export enum JobStatus {
   Idle = "idle",
@@ -90,22 +91,19 @@ export function createDb(path: string = DB_PATH): Database {
   return d;
 }
 
-export function isDaemonActive(db: Database): boolean {
-  const row = db
-    .prepare("SELECT value FROM system_stats WHERE key = ?")
-    .get("daemon_pid") as { value: string } | null;
-
-  if (!row) return false;
-  const pid = parseInt(row.value);
-  if (isNaN(pid)) return false;
-
+export function isDaemonActive(db?: Database): boolean {
   try {
-    // Signal 0 is used to check if a process exists
-    process.kill(pid, 0);
-    return true;
-  } catch (e: any) {
-    // ESRCH means process not found
-    // EPERM means process exists but we don't have permission (still active)
-    return e.code === "EPERM";
+    if (process.platform === "win32") {
+      // Search for bun/node processes that have 'pyrunner' and 'daemon' in their command line
+      const cmd = `powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \\"Name = 'bun.exe' OR Name = 'node.exe' OR Name = 'pyrunner.exe'\\" | Where-Object { $_.CommandLine -like '*pyrunner*daemon*' } | Select-Object -ExpandProperty ProcessId"`;
+      const out = execSync(cmd, { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+      return out.length > 0;
+    } else {
+      // pgrep -f matches the full command line
+      execSync('pgrep -f "pyrunner.*daemon"', { stdio: "ignore" });
+      return true;
+    }
+  } catch {
+    return false;
   }
 }
