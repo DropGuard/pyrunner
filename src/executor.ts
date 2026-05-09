@@ -24,6 +24,8 @@ function runProcess(job: Job) {
 export async function executeJob(job: Job, isCatchup: boolean = false) {
   const logPath = join(LOGS_DIR, `${job.name}.log`);
   const startTime = Date.now();
+  // Use the scheduled time as the base for the NEXT run calculation to avoid drift
+  const baseTimeForNextRun = job.next_run_time || startTime;
   const runType = isCatchup ? "Catch-up" : "Scheduled";
 
   console.log(
@@ -32,31 +34,59 @@ export async function executeJob(job: Job, isCatchup: boolean = false) {
 
   // 1. Validation
   if (!existsSync(job.script_path)) {
-    return handleMissingScript(job, logPath, startTime);
+    return handleMissingScript(job, logPath, startTime, baseTimeForNextRun);
   }
 
   // 2. Preparation
+  // Note: Atomic status update should have happened in the daemon before calling this
   updateJobState(job.id!, JobStatus.Running, startTime);
   appendFileSync(
     logPath,
     `\n--- RUN STARTED AT ${new Date(startTime).toLocaleString()} ---\n`,
   );
 
+  let timeoutTimer: Timer | null = null;
+
   try {
     // 3. Execution
     const proc = runProcess(job);
     updateJobPid(job.id!, proc.pid);
 
-    const exitCode = await proc.exited;
-    const stdout = await new Response(proc.stdout).arrayBuffer();
-    const stderr = await new Response(proc.stderr).arrayBuffer();
+    // Setup Timeout
+    const timeoutMs = (job.timeout || 600) * 1000;
+    timeoutTimer = setTimeout(() => {
+      console.warn(`[${new Date().toLocaleString()}] Job ${job.name} timed out after ${timeoutMs / 1000}s. Killing...`);
+      proc.kill();
+      appendFileSync(logPath, `\nERROR: Job timed out after ${timeoutMs / 1000}s and was killed.\n`);
+    }, timeoutMs);
+
+    // Streaming stdout/stderr to file
+    const streamToLog = async (stream: ReadableStream) => {
+      const reader = stream.getReader();
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          appendFileSync(logPath, decodeOutput(value));
+        }
+      } finally {
+        reader.releaseLock();
+      }
+    };
+
+    // Run streaming in parallel
+    const [exitCode] = await Promise.all([
+      proc.exited,
+      streamToLog(proc.stdout),
+      streamToLog(proc.stderr),
+    ]);
+
+    if (timeoutTimer) clearTimeout(timeoutTimer);
 
     // 4. Finalization
-    const nextRun = calculateNextRun(job.cron);
+    const nextRun = calculateNextRun(job.cron, baseTimeForNextRun);
     finalizeJob(job.id!, exitCode, nextRun, JobStatus.Idle);
 
-    appendFileSync(logPath, decodeOutput(new Uint8Array(stdout)));
-    appendFileSync(logPath, decodeOutput(new Uint8Array(stderr)));
     appendFileSync(
       logPath,
       `\n--- RUN FINISHED AT ${new Date().toLocaleString()} WITH EXIT CODE ${exitCode} ---\n`,
@@ -66,15 +96,19 @@ export async function executeJob(job: Job, isCatchup: boolean = false) {
       `[${new Date().toLocaleString()}] Finished job: ${job.name} (Exit: ${exitCode})`,
     );
   } catch (error: any) {
-    handleExecutionError(job, logPath, error);
+    if (timeoutTimer) clearTimeout(timeoutTimer);
+    handleExecutionError(job, logPath, error, baseTimeForNextRun);
   }
 }
 
 /**
  * Calculates the next execution time based on a cron expression.
+ * @param cron The cron expression
+ * @param baseTime Optional base time. If provided, calculates next run AFTER this time.
  */
-export function calculateNextRun(cron: string): number {
-  return CronExpressionParser.parse(cron).next().getTime();
+export function calculateNextRun(cron: string, baseTime?: number): number {
+  const options = baseTime ? { currentDate: new Date(baseTime) } : {};
+  return CronExpressionParser.parse(cron, options).next().getTime();
 }
 
 /**
@@ -128,14 +162,19 @@ function finalizeJob(
     .run(status, exitCode, nextRun, id);
 }
 
-function handleMissingScript(job: Job, logPath: string, startTime: number) {
+function handleMissingScript(
+  job: Job,
+  logPath: string,
+  startTime: number,
+  baseTime: number,
+) {
   const errorMsg = `Error: Script not found at ${job.script_path}`;
   appendFileSync(
     logPath,
     `\n--- RUN FAILED AT ${new Date(startTime).toLocaleString()} ---\n${errorMsg}\n`,
   );
 
-  const nextRun = calculateNextRun(job.cron);
+  const nextRun = calculateNextRun(job.cron, baseTime);
   getDb()
     .prepare(
       "UPDATE jobs SET status = ?, last_run_time = ?, next_run_time = ? WHERE id = ?",
@@ -147,14 +186,23 @@ function handleMissingScript(job: Job, logPath: string, startTime: number) {
   );
 }
 
-function handleExecutionError(job: Job, logPath: string, error: any) {
+function handleExecutionError(
+  job: Job,
+  logPath: string,
+  error: any,
+  baseTime: number,
+) {
   const endTime = Date.now();
   appendFileSync(
     logPath,
     `\n--- RUN FAILED AT ${new Date(endTime).toLocaleString()} ---\nERROR: ${error.message}\n`,
   );
 
-  updateJobState(job.id!, JobStatus.Failed);
+  const nextRun = calculateNextRun(job.cron, baseTime);
+  getDb()
+    .prepare("UPDATE jobs SET status = ?, next_run_time = ? WHERE id = ?")
+    .run(JobStatus.Failed, nextRun, job.id!);
+
   console.error(
     `[${new Date().toLocaleString()}] Job failed: ${job.name}`,
     error,

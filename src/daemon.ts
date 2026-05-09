@@ -1,8 +1,8 @@
-import { ensureEnv } from "./config";
+import { ensureEnv, HEARTBEAT_INTERVAL } from "./config";
 import { getDb, type Job, JobStatus } from "./db";
 import { executeJob } from "./executor";
 
-async function tick(isInitial: boolean = false) {
+export async function tick(isInitial: boolean = false) {
   try {
     const db = getDb();
     const now = Date.now();
@@ -25,17 +25,28 @@ async function tick(isInitial: boolean = false) {
     if (dueJobs.length > 0) {
       const type = isInitial ? "Catch-up" : "Scheduled";
       console.log(
-        `[${new Date().toLocaleString()}] [${type}] Found ${dueJobs.length} due jobs.`,
+        `[${new Date().toLocaleString()}] [${type}] Found ${dueJobs.length} due jobs. Attempting to start...`,
       );
       for (const job of dueJobs) {
-        // We don't await executeJob here to allow parallel execution,
-        // but executeJob itself should handle its own errors.
-        executeJob(job, isInitial).catch((err) => {
-          console.error(
-            `[${new Date().toLocaleString()}] Unhandled error in job ${job.name}:`,
-            err,
-          );
-        });
+        // Atomic status update to prevent race conditions between multiple daemon instances
+        // We only pick up the job if it's still not running
+        const updated = db.prepare(
+          "UPDATE jobs SET status = $running WHERE id = $id AND status != $running RETURNING *"
+        ).get({
+          $id: job.id,
+          $running: JobStatus.Running
+        }) as Job | null;
+
+        if (updated) {
+          // We don't await executeJob here to allow parallel execution,
+          // but executeJob itself should handle its own errors.
+          executeJob(updated, isInitial).catch((err) => {
+            console.error(
+              `[${new Date().toLocaleString()}] Unhandled error in job ${updated.name}:`,
+              err,
+            );
+          });
+        }
       }
     }
   } catch (error) {
@@ -84,7 +95,7 @@ export async function runDaemon() {
     await tick(true);
 
     // Poll every 30 seconds
-    setInterval(() => tick(false), 30 * 1000);
+    setInterval(() => tick(false), HEARTBEAT_INTERVAL);
   } catch (error) {
     console.error("Failed to start daemon:", error);
     process.exit(1);

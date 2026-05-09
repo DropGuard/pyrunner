@@ -1,65 +1,62 @@
-import { expect, test, describe, beforeAll } from "bun:test";
-import { Database } from "bun:sqlite";
-import { getDb, JobStatus } from "../src/db";
-import { DB_PATH } from "../src/config";
-import { unlinkSync, existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { expect, test, describe, beforeAll, afterAll } from "bun:test";
+import { getDb, isDaemonActive } from "../src/db";
+import { tick } from "../src/daemon";
+import { HEARTBEAT_THRESHOLD } from "../src/config";
 
-const HEARTBEAT_DB = resolve(process.cwd(), "test_heartbeat.sqlite");
+describe("Heartbeat Mechanism (Scientific)", () => {
+  const db = getDb();
 
-describe("Heartbeat Mechanism", () => {
-  beforeAll(() => {
-    // Override DB_PATH for this specific test to avoid locking with other parallel tests
-    process.env.PYRUNNER_DB_PATH = HEARTBEAT_DB;
-    if (existsSync(HEARTBEAT_DB)) unlinkSync(HEARTBEAT_DB);
-  });
-
-  test("Database initialization should create system_stats table", () => {
-    const db = getDb();
-    const tableExists = db
-      .query(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='system_stats'",
-      )
-      .get();
-    expect(tableExists).toBeDefined();
-
-    const heartbeat = db
-      .prepare("SELECT * FROM system_stats WHERE key = ?")
+  test("tick() should update daemon_heartbeat", async () => {
+    // 1. Get current heartbeat
+    const before = db
+      .prepare("SELECT updated_at FROM system_stats WHERE key = ?")
       .get("daemon_heartbeat") as any;
-    expect(heartbeat).toBeDefined();
-    expect(heartbeat.value).toBe("running");
+    
+    // Wait a bit to ensure timestamp changes
+    await new Promise(resolve => setTimeout(resolve, 10));
+
+    // 2. Run tick
+    await tick();
+
+    // 3. Check if updated_at increased
+    const after = db
+      .prepare("SELECT updated_at FROM system_stats WHERE key = ?")
+      .get("daemon_heartbeat") as any;
+    
+    expect(after.updated_at).toBeGreaterThan(before?.updated_at || 0);
   });
 
-  test("Active status detection logic (threshold: 65s)", () => {
-    const db = getDb();
+  test("isDaemonActive() should follow HEARTBEAT_THRESHOLD", () => {
     const now = Date.now();
 
-    // 1. Test Active: Updated 10 seconds ago
-    const tenSecsAgo = now - 10000;
+    // Case 1: Just updated
     db.prepare("UPDATE system_stats SET updated_at = ? WHERE key = ?").run(
-      tenSecsAgo,
-      "daemon_heartbeat",
+      now - 1000,
+      "daemon_heartbeat"
     );
+    expect(isDaemonActive()).toBe(true);
 
-    const rowActive = db
-      .prepare("SELECT updated_at FROM system_stats WHERE key = ?")
-      .get("daemon_heartbeat") as any;
-    const isDaemonActive =
-      rowActive && Date.now() - rowActive.updated_at < 65000;
-    expect(isDaemonActive).toBe(true);
-
-    // 2. Test Offline: Updated 70 seconds ago
-    const seventySecsAgo = now - 70000;
+    // Case 2: Exactly at threshold (should be false or true depending on < or <=, we used <)
     db.prepare("UPDATE system_stats SET updated_at = ? WHERE key = ?").run(
-      seventySecsAgo,
-      "daemon_heartbeat",
+      now - HEARTBEAT_THRESHOLD,
+      "daemon_heartbeat"
     );
+    expect(isDaemonActive()).toBe(false);
 
-    const rowOffline = db
-      .prepare("SELECT updated_at FROM system_stats WHERE key = ?")
-      .get("daemon_heartbeat") as any;
-    const isDaemonOffline =
-      !rowOffline || Date.now() - rowOffline.updated_at >= 65000;
-    expect(isDaemonOffline).toBe(true);
+    // Case 3: Way past threshold
+    db.prepare("UPDATE system_stats SET updated_at = ? WHERE key = ?").run(
+      now - (HEARTBEAT_THRESHOLD + 10000),
+      "daemon_heartbeat"
+    );
+    expect(isDaemonActive()).toBe(false);
+  });
+
+  test("isDaemonActive() should return false if no heartbeat record exists", () => {
+    db.prepare("DELETE FROM system_stats WHERE key = ?").run("daemon_heartbeat");
+    expect(isDaemonActive()).toBe(false);
+
+    // Restore for other tests if needed
+    db.prepare("INSERT INTO system_stats (key, value, updated_at) VALUES (?, ?, ?)")
+      .run("daemon_heartbeat", "running", Date.now());
   });
 });

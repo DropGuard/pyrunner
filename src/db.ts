@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { DB_PATH } from "./config";
+import { DB_PATH, HEARTBEAT_THRESHOLD } from "./config";
 
 export enum JobStatus {
   Idle = "idle",
@@ -14,6 +14,7 @@ export interface Job {
   script_path: string;
   working_dir: string;
   cron: string;
+  timeout?: number; // Timeout in seconds
   next_run_time: number;
   status: JobStatus;
   last_run_time?: number;
@@ -34,6 +35,7 @@ export function getDb() {
         script_path TEXT,
         working_dir TEXT,
         cron TEXT,
+        timeout INTEGER DEFAULT 600,
         next_run_time INTEGER,
         status TEXT DEFAULT 'idle',
         last_run_time INTEGER,
@@ -54,4 +56,14 @@ export function getDb() {
     ).run("daemon_heartbeat", "running", Date.now());
   }
   return db;
+}
+
+export function isDaemonActive(): boolean {
+  const db = getDb();
+  const heartbeat = db
+    .prepare("SELECT updated_at FROM system_stats WHERE key = ?")
+    .get("daemon_heartbeat") as { updated_at: number } | null;
+
+  if (!heartbeat) return false;
+  return Date.now() - heartbeat.updated_at < HEARTBEAT_THRESHOLD;
 }

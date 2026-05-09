@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { Command } from "commander";
-import { getDb, type Job } from "./db";
+import { getDb, isDaemonActive, type Job } from "./db";
 import { calculateNextRun } from "./executor";
 import { resolve, dirname, join } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
@@ -104,14 +104,7 @@ program
     const db = getDb();
     const jobs = db.query("SELECT * FROM jobs").all() as Job[];
 
-    // Check daemon heartbeat
-    const heartbeat = db
-      .prepare("SELECT updated_at FROM system_stats WHERE key = ?")
-      .get("daemon_heartbeat") as { updated_at: number } | null;
-    const isDaemonActive =
-      heartbeat && Date.now() - heartbeat.updated_at < 65000; // 65 seconds threshold (daemon polls every 30s)
-
-    if (isDaemonActive) {
+    if (isDaemonActive()) {
       console.log(`\x1b[32m● Scheduler is active\x1b[0m\n`);
     } else {
       console.log(
