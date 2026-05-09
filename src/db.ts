@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
-import { DB_PATH } from "./config";
-import { execSync } from "node:child_process";
+import { DB_PATH, DAEMON_LOCK_PATH } from "./config";
+import { existsSync, readFileSync } from "node:fs";
 
 export enum JobStatus {
   Idle = "idle",
@@ -15,7 +15,7 @@ export interface Job {
   script_path: string;
   working_dir: string;
   cron: string;
-  timeout?: number; // Timeout in seconds
+  timeout?: number;
   next_run_time: number;
   status: JobStatus;
   last_run_time?: number;
@@ -24,101 +24,116 @@ export interface Job {
   created_at: number;
 }
 
-/**
- * Creates and initializes a new database connection.
- * @param path The path to the database file or ":memory:".
- */
+export class JobRepository {
+  constructor(private db: Database) {}
+
+  getAll(): Job[] {
+    return this.db.query("SELECT * FROM jobs").all() as Job[];
+  }
+
+  getByName(name: string): Job | null {
+    return this.db.prepare("SELECT * FROM jobs WHERE name = ?").get(name) as Job | null;
+  }
+
+  getDueJobs(now: number): Job[] {
+    return this.db
+      .query("SELECT * FROM jobs WHERE next_run_time <= $now AND status != $running")
+      .all({ $now: now, $running: JobStatus.Running }) as Job[];
+  }
+
+  markAsRunning(id: number): Job | null {
+    return this.db.prepare(`
+      UPDATE jobs 
+      SET status = ?, last_run_time = ? 
+      WHERE id = ? AND status != ? 
+      RETURNING *
+    `).get(JobStatus.Running, Date.now(), id, JobStatus.Running) as Job | null;
+  }
+
+  updatePid(id: number, pid: number | null) {
+    this.db.prepare("UPDATE jobs SET pid = ? WHERE id = ?").run(pid, id);
+  }
+
+  finalize(id: number, exitCode: number, nextRun: number, status: JobStatus = JobStatus.Idle) {
+    this.db.prepare(`
+      UPDATE jobs 
+      SET status = ?, last_exit_code = ?, next_run_time = ?, pid = NULL 
+      WHERE id = ?
+    `).run(status, exitCode, nextRun, id);
+  }
+
+  add(job: Omit<Job, "id" | "status" | "created_at">) {
+    this.db.prepare(`
+      INSERT INTO jobs (name, script_path, working_dir, cron, timeout, next_run_time, status, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      job.name, 
+      job.script_path, 
+      job.working_dir, 
+      job.cron, 
+      job.timeout ?? 600, 
+      job.next_run_time, 
+      JobStatus.Idle, 
+      Date.now()
+    );
+  }
+
+  update(name: string, data: Partial<Pick<Job, "script_path" | "working_dir" | "cron" | "timeout" | "next_run_time">>) {
+    const keys = Object.keys(data);
+    if (keys.length === 0) return;
+    const sets = keys.map(k => `${k} = ?`).join(", ");
+    const values = Object.values(data);
+    this.db.prepare(`UPDATE jobs SET ${sets} WHERE name = ?`).run(...values, name);
+  }
+
+  delete(name: string): boolean {
+    const res = this.db.prepare("DELETE FROM jobs WHERE name = ?").run(name);
+    return res.changes > 0;
+  }
+
+  cleanupStaleJobs() {
+    this.db.prepare("UPDATE jobs SET status = ?, pid = NULL WHERE status = ?")
+      .run(JobStatus.Idle, JobStatus.Running);
+  }
+}
+
 export function createDb(path: string = DB_PATH): Database {
   const d = new Database(path);
-  
-  // Performance and concurrency optimizations
   d.run("PRAGMA journal_mode = WAL");
   d.run("PRAGMA synchronous = NORMAL");
 
-  // Initial schema (basic structure)
+  // Clean, final schema
   d.run(`
     CREATE TABLE IF NOT EXISTS jobs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT UNIQUE,
+      script_path TEXT,
+      working_dir TEXT,
+      cron TEXT,
+      timeout INTEGER DEFAULT 600,
+      next_run_time INTEGER,
+      status TEXT DEFAULT 'idle',
+      last_run_time INTEGER,
+      last_exit_code INTEGER,
+      pid INTEGER,
       created_at INTEGER
     )
   `);
 
-  // Migration logic (Must run BEFORE creating indexes on new columns)
-  const currentVersion = d.prepare("PRAGMA user_version").get() as { user_version: number };
-  const targetVersion = 1;
-
-  if (currentVersion.user_version < targetVersion) {
-    const tableInfo = d.prepare("PRAGMA table_info(jobs)").all() as any[];
-    const columns = tableInfo.map(c => c.name);
-
-    const requiredColumns = [
-      { name: "script_path", type: "TEXT" },
-      { name: "working_dir", type: "TEXT" },
-      { name: "cron", type: "TEXT" },
-      { name: "timeout", type: "INTEGER DEFAULT 600" },
-      { name: "next_run_time", type: "INTEGER" },
-      { name: "status", type: "TEXT DEFAULT 'idle'" },
-      { name: "last_run_time", type: "INTEGER" },
-      { name: "last_exit_code", type: "INTEGER" },
-      { name: "pid", type: "INTEGER" },
-    ];
-
-    for (const col of requiredColumns) {
-      if (!columns.includes(col.name)) {
-        d.run(`ALTER TABLE jobs ADD COLUMN ${col.name} ${col.type}`);
-      }
-    }
-
-    // Data fix: Ensure all existing jobs have a timeout
-    d.run("UPDATE jobs SET timeout = 600 WHERE timeout IS NULL");
-    
-    d.run(`PRAGMA user_version = ${targetVersion}`);
-  }
-
-  // Now safe to create indexes and tables that depend on migrated schema
   d.run("CREATE INDEX IF NOT EXISTS idx_jobs_next_run ON jobs (next_run_time)");
   d.run("CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs (status)");
-
-  d.run(`
-    CREATE TABLE IF NOT EXISTS system_stats (
-      key TEXT PRIMARY KEY,
-      value TEXT,
-      updated_at INTEGER
-    )
-  `);
 
   return d;
 }
 
-/**
- * Checks if the daemon process is currently running using system-level process scanning.
- * This is a "zero-write" check that doesn't rely on database heartbeats.
- */
-export function isDaemonActive(db?: Database): boolean {
+export function isDaemonActive(): boolean {
+  if (!existsSync(DAEMON_LOCK_PATH)) return false;
   try {
-    if (process.platform === "win32") {
-      // Robust Windows check: Use WMIC to find any process whose command line contains both 'pyrunner' and 'daemon'.
-      // This avoids issues with different executable names (bun.exe, node.exe, pyrunner.exe, etc.)
-      const cmd = 'wmic process where "commandline like \'%pyrunner%daemon%\'" get processid /format:list';
-      const out = execSync(cmd, { stdio: ["ignore", "pipe", "ignore"], encoding: "utf-8" });
-      
-      // Filter out our own process if we are running 'pyrunner daemon' in the foreground
-      const pids = out.split("\n")
-        .map(line => line.trim())
-        .filter(line => line.startsWith("ProcessId="))
-        .map(line => line.split("=")[1])
-        .filter((pid): pid is string => !!pid);
-
-      return pids.some(pid => parseInt(pid) !== process.pid);
-    } else {
-      // Unix check: pgrep -f matches the full command line
-      const out = execSync('pgrep -f "pyrunner.*daemon"', { stdio: ["ignore", "pipe", "ignore"], encoding: "utf-8" });
-      const pids = out.trim().split("\n");
-      return pids.some(pid => parseInt(pid) !== process.pid);
-    }
+    const pid = parseInt(readFileSync(DAEMON_LOCK_PATH, "utf-8").trim());
+    if (isNaN(pid)) return false;
+    process.kill(pid, 0); 
+    return pid !== process.pid;
   } catch {
-    // If command fails or no match found, assume offline
     return false;
   }
 }

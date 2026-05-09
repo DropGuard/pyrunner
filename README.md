@@ -12,8 +12,8 @@
 - **⚡ Lightweight & Fast**: Built with Bun for minimal overhead and maximum performance.
 - **🛠️ Automated Environment**: Leverages `uv` for lightning-fast Python dependency management.
 - **📅 Cron Scheduling**: Robust task scheduling using standard Cron syntax.
-- **🖥️ Service Integration**: Install as a native system service (Windows Service, systemd, or macOS Launchd) with one command.
-- **📊 Task Management**: Easily add, list, edit, and remove tasks via an intuitive CLI.
+- **🖥️ Service Integration**: Native background service support for Windows (Registry), Linux (systemd), and macOS (launchd).
+- **🛡️ Industrial Grade**: Atomic status updates, process tree cleanup, and strict encoding enforcement.
 - **📝 Log Monitoring**: Built-in log management to track your script outputs.
 
 ---
@@ -62,16 +62,28 @@ pyrunner uninstall
 
 ---
 
+## ⚠️ Important: Encoding & Versioning
+
+To ensure reliability and prevent data corruption, PyRunner enforces a strict **UTF-8 Everywhere** policy:
+
+- **Python Version**: Requires **Python 3.8+**.
+- **Strict UTF-8**: PyRunner processes all output as UTF-8. 
+- **Auto-Sanitization**: Any invalid non-UTF-8 bytes (e.g., from legacy scripts) are automatically replaced with the Unicode replacement character (). This ensures your **database and logs remain 100% valid UTF-8** and never get corrupted.
+- **Windows**: PyRunner automatically configures the environment (`PYTHONUTF8=1`) to use UTF-8.
+
+---
+
 ## 🛠️ CLI Reference
 
 | Command | Description |
 | :--- | :--- |
-| `add <name> <script> <cron>` | Add a new scheduled task. |
-| `list` | List all tasks with their status and next run time. |
-| `edit <name>` | Update a task's script path or cron expression. |
-| `remove <name>` | Delete a scheduled task. |
-| `logs <name>` | View the latest output logs for a specific task. |
-| `daemon` | Start the scheduler in the foreground. |
+| `add <name> <script> [cron]` | Add a new scheduled task. |
+| `list` / `ls` | List all tasks with their status and next run time. |
+| `edit <name>` | Update a task's script, cron, or timeout. |
+| `remove <name>` / `rm` | Delete a scheduled task. |
+| `run <name>` | Run a task immediately (manual trigger). |
+| `stop [name]` | Stop a specific running task or all tasks. |
+| `daemon [--hidden]` | Start the scheduler (use `--hidden` on Windows for background). |
 | `install` | Register PyRunner as a system-level background service. |
 | `uninstall` | Remove the registered system service. |
 
@@ -80,8 +92,9 @@ pyrunner uninstall
 ## 📋 Requirements
 
 - **Bun**: v1.0.0+
-- **uv**: Latest version recommended (for Python environment management)
-- **OS**: Windows, macOS, or Linux
+- **uv**: Latest version recommended.
+- **Python**: v3.8+ (Strictly enforced).
+- **OS**: Windows, macOS, or Linux.
 
 ---
 

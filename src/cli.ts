@@ -4,19 +4,26 @@ import { runDaemon } from "./daemon";
 import { installService, uninstallService } from "./service";
 import pkg from "../package.json" with { type: "json" };
 import { $ } from "bun";
-import { createDb } from "./db";
+import { createDb, JobRepository } from "./db";
 import * as actions from "./actions";
+import { setupWindowsEncoding } from "./utils";
 
 const program = new Command();
 
-// Windows-specific: Force UTF-8 code page to avoid Mojibake
-async function setupWindowsEncoding() {
-  if (process.platform === "win32") {
-    await $`chcp 65001`.quiet().nothrow();
+// Helper to wrap async/sync actions for error handling
+const wrapAction = (action: (...args: any[]) => any) => async (...args: any[]) => {
+  try {
+    const result = action(...args);
+    if (result instanceof Promise) {
+      await result;
+    }
+  } catch (e) {
+    console.error(`\x1b[31m[Error] ${e instanceof Error ? e.message : String(e)}\x1b[0m`);
+    process.exit(1);
   }
-}
+};
 
-// Check for required dependencies: bun and uv
+// Check for required dependencies: bun, uv and python version
 async function checkRequirements() {
   const dependencies = [
     {
@@ -27,7 +34,7 @@ async function checkRequirements() {
     {
       name: "uv",
       command: "uv --version",
-      hint: "Install uv via: curl -LsSf https://astral.sh/uv/install.sh | sh (or visit https://astral.sh/uv)",
+      hint: "Install uv via: curl -LsSf https://astral.sh/uv/install.sh | sh",
     },
   ];
 
@@ -36,17 +43,33 @@ async function checkRequirements() {
       const { exitCode } = await $`${{ raw: dep.command }}`.quiet().nothrow();
       if (exitCode !== 0) throw new Error();
     } catch (e) {
-      console.error(
-        `\x1b[31m[Error] Required dependency '${dep.name}' not found.\x1b[0m`,
-      );
+      console.error(`\x1b[31m[Error] Required dependency '${dep.name}' not found.\x1b[0m`);
       console.error(`[Tip] ${dep.hint}\n`);
       process.exit(1);
     }
   }
+
+  // Strict Python Version Check (Ensures UTF-8 support)
+  try {
+    const output = await $`uv run python --version`.quiet().text();
+    const match = output.match(/Python (\d+)\.(\d+)/);
+    if (match && match[1] && match[2]) {
+      const major = parseInt(match[1]);
+      const minor = parseInt(match[2]);
+      if (major < 3 || (major === 3 && minor < 8)) {
+        console.error(`\x1b[31m[Error] Python version ${major}.${minor} is too old.\x1b[0m`);
+        console.error(`[Tip] PyRunner requires Python 3.8+ to guarantee UTF-8 encoding support.\n`);
+        process.exit(1);
+      }
+    }
+  } catch (e) {
+    // If uv run python fails, it will be caught by the user during the first task run anyway
+  }
 }
 
-// Global DB instance for CLI actions
+// Global instances for CLI actions
 const db = createDb();
+const repo = new JobRepository(db);
 
 program
   .name("pyrunner")
@@ -58,7 +81,7 @@ program
 
     ensureEnv();
     await checkRequirements();
-    await setupWindowsEncoding();
+    setupWindowsEncoding();
   });
 
 program
@@ -71,74 +94,62 @@ program
     "Cron expression (default: '0 12 * * *' - daily at noon)",
     "0 12 * * *",
   )
-  .option("-t, --timeout <seconds>", "Execution timeout in seconds", "600")
-  .action((name, script, cron, options) => actions.addJob(db, name, script, cron, options));
+  .action(wrapAction((name, script, cron) => actions.addJob(repo, name, script, cron)));
 
 program
   .command("list")
-  .description("List all scheduled tasks")
-  .action(() => actions.listJobs(db));
+  .alias("ls")
+  .description("List all tasks")
+  .action(wrapAction(() => actions.listJobs(repo)));
 
 program
   .command("remove")
+  .alias("rm")
   .description("Remove a task")
   .argument("<name>", "Name of the task")
-  .action((name) => actions.removeJob(db, name));
+  .action(wrapAction((name) => actions.removeJob(repo, name)));
 
 program
   .command("stop")
-  .description("Stop running tasks (stops all if no name provided)")
-  .argument("[name]", "Name of the task")
-  .action((name) => actions.stopJob(db, name));
+  .description("Stop a running task")
+  .argument("[name]", "Name of the task (omit to stop all)")
+  .action(wrapAction((name) => actions.stopJob(repo, name)));
 
 program
   .command("run")
-  .description(
-    "Execute tasks immediately (runs all idle tasks if no name provided)",
-  )
+  .description("Run a task immediately")
   .argument("[name]", "Name of the task")
-  .action((name) => actions.runJob(db, name));
+  .action(wrapAction((name) => actions.runJob(repo, name)));
+
+program
+  .command("logs")
+  .description("View task output logs")
+  .argument("[name]", "Name of the task")
+  .option("-n, --lines <count>", "Number of lines to show")
+  .action(wrapAction((name, options) => actions.showLogs(repo, name, options)));
 
 program
   .command("edit")
   .description("Edit an existing task")
   .argument("<name>", "Name of the task")
-  .option("-s, --script <path>", "New path to the Python script")
+  .option("-s, --script <path>", "New script path")
   .option("-c, --cron <expression>", "New cron expression")
-  .option("-t, --timeout <seconds>", "New execution timeout in seconds")
-  .action((name, options) => actions.editJob(db, name, options));
-
-program
-  .command("logs")
-  .description(
-    "View the latest execution logs for all tasks, or specify a task name",
-  )
-  .argument("[name]", "Task name (optional)")
-  .option(
-    "-t, --tail <lines>",
-    "Number of lines to show (only for specific task)",
-  )
-  .action((name, options) => actions.showLogs(db, name, options));
+  .action(wrapAction((name, options) => actions.editJob(repo, name, options)));
 
 program
   .command("daemon")
-  .description("Run the scheduler daemon in the foreground")
-  .action(() => {
-    runDaemon();
-  });
+  .description("Start the scheduler daemon")
+  .option("--hidden", "Hide console window (Windows only)")
+  .action(wrapAction((options) => runDaemon(options)));
 
 program
   .command("install")
-  .description("Install the daemon as an auto-start service")
-  .action(async () => {
-    await installService();
-  });
+  .description("Install pyrunner as a background service")
+  .action(wrapAction(() => installService()));
 
 program
   .command("uninstall")
-  .description("Remove the auto-start service")
-  .action(async () => {
-    await uninstallService();
-  });
+  .description("Uninstall pyrunner background service")
+  .action(wrapAction(() => uninstallService()));
 
 program.parse();

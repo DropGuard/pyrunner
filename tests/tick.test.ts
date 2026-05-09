@@ -1,14 +1,16 @@
 import { expect, test, describe, beforeEach, spyOn, afterEach } from "bun:test";
-import { createDb, type Job, JobStatus } from "../src/db";
+import { createDb, type Job, JobStatus, JobRepository } from "../src/db";
 import { tick } from "../src/daemon";
 import * as executor from "../src/executor";
 import { type Database } from "bun:sqlite";
 
-describe("Daemon Tick & Job Triggering (with DI)", () => {
+describe("Daemon Tick Logic", () => {
   let db: Database;
+  let repo: JobRepository;
   
   beforeEach(() => {
     db = createDb(":memory:");
+    repo = new JobRepository(db);
   });
 
   afterEach(() => {
@@ -27,11 +29,11 @@ describe("Daemon Tick & Job Triggering (with DI)", () => {
       return Promise.resolve();
     });
 
-    await tick(db);
+    await tick(repo);
 
     expect(executeSpy).toHaveBeenCalled();
-    const job = db.query("SELECT * FROM jobs WHERE name = 'due_job'").get() as Job;
-    expect(job.status).toBe(JobStatus.Running);
+    const job = repo.getByName("due_job");
+    expect(job?.status).toBe(JobStatus.Running);
 
     executeSpy.mockRestore();
   });
@@ -46,11 +48,11 @@ describe("Daemon Tick & Job Triggering (with DI)", () => {
 
     const executeSpy = spyOn(executor, "executeJob").mockImplementation(async () => {});
 
-    await tick(db);
+    await tick(repo);
 
     expect(executeSpy).not.toHaveBeenCalled();
-    const job = db.query("SELECT * FROM jobs WHERE name = 'future_job'").get() as Job;
-    expect(job.status).toBe(JobStatus.Idle);
+    const job = repo.getByName("future_job");
+    expect(job?.status).toBe(JobStatus.Idle);
 
     executeSpy.mockRestore();
   });
@@ -65,7 +67,7 @@ describe("Daemon Tick & Job Triggering (with DI)", () => {
 
     const executeSpy = spyOn(executor, "executeJob").mockImplementation(async () => {});
 
-    await tick(db);
+    await tick(repo);
 
     expect(executeSpy).not.toHaveBeenCalled();
     executeSpy.mockRestore();

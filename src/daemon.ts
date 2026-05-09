@@ -1,80 +1,60 @@
-import { ensureEnv, HEARTBEAT_INTERVAL } from "./config";
-import { createDb, type Job, JobStatus } from "./db";
+import { ensureEnv, HEARTBEAT_INTERVAL, DAEMON_LOCK_PATH } from "./config";
+import { createDb, JobStatus, JobRepository } from "./db";
 import { executeJob } from "./executor";
-import { type Database } from "bun:sqlite";
+import { logger, hideConsole } from "./utils";
+import { writeFileSync, unlinkSync } from "node:fs";
 
-export async function tick(db: Database, isInitial: boolean = false) {
+export async function tick(repo: JobRepository, isInitial: boolean = false): Promise<number> {
   try {
     const now = Date.now();
-
-    // Update heartbeat only once every 30 seconds to reduce disk I/O
-    const lastHeartbeat = db.prepare("SELECT updated_at FROM system_stats WHERE key = ?").get("daemon_heartbeat") as { updated_at: number } | null;
-    if (!lastHeartbeat || now - lastHeartbeat.updated_at >= 30000) {
-      db.prepare("UPDATE system_stats SET updated_at = ? WHERE key = ?").run(
-        now,
-        "daemon_heartbeat",
-      );
-    }
-
-    const dueJobs = db
-      .query(
-        "SELECT * FROM jobs WHERE next_run_time <= $now AND status != $running",
-      )
-      .all({
-        $now: now,
-        $running: JobStatus.Running,
-      }) as Job[];
+    const dueJobs = repo.getDueJobs(now);
 
     if (dueJobs.length > 0) {
       const type = isInitial ? "Catch-up" : "Scheduled";
-      console.log(
-        `[${new Date().toLocaleString()}] [${type}] Found ${dueJobs.length} due jobs. Attempting to start...`,
-      );
+      logger.info(`[${type}] Found ${dueJobs.length} due jobs. Attempting to start...`);
+      
       for (const job of dueJobs) {
         // Atomic status update
-        const updated = db.prepare(
-          "UPDATE jobs SET status = ? WHERE id = ? AND status != ? RETURNING *"
-        ).get(JobStatus.Running, job.id!, JobStatus.Running) as Job | null;
-
+        const updated = repo.markAsRunning(job.id!);
         if (updated) {
-          executeJob(db, updated, isInitial).catch((err) => {
-            console.error(
-              `[${new Date().toLocaleString()}] Unhandled error in job ${updated.name}:`,
-              err,
-            );
+          executeJob(repo, updated, isInitial).catch((err) => {
+            logger.error(`Unhandled error in job ${updated.name}:`, err);
           });
         }
       }
     }
+
+    // Return time until the NEXT job needs to run
+    const allJobs = repo.getAll();
+    if (allJobs.length === 0) return HEARTBEAT_INTERVAL * 60; // Sleep 1min if no jobs
+    
+    const nextRun = Math.min(...allJobs.map(j => j.next_run_time));
+    return Math.max(HEARTBEAT_INTERVAL, nextRun - Date.now());
+
   } catch (error) {
-    console.error(
-      `[${new Date().toLocaleString()}] Error during daemon tick:`,
-      error,
-    );
+    logger.error("Error during daemon tick:", error);
+    return HEARTBEAT_INTERVAL;
   }
 }
 
-export async function runDaemon() {
+export async function runDaemon(options?: { hidden?: boolean }) {
   try {
-    ensureEnv();
-    const db = createDb();
-
-    // Cleanup stale running tasks
-    const runningJobs = db
-      .query("SELECT * FROM jobs WHERE status = 'running'")
-      .all() as Job[];
-    if (runningJobs.length > 0) {
-      console.log(
-        `[${new Date().toLocaleString()}] Cleaning up ${runningJobs.length} stale running tasks...`,
-      );
-      db.prepare(
-        "UPDATE jobs SET status = 'idle', pid = NULL WHERE status = 'running'",
-      ).run();
+    if (options?.hidden) {
+      hideConsole();
     }
 
-    const allJobs = db
-      .query("SELECT name, cron, next_run_time FROM jobs")
-      .all() as Pick<Job, "name" | "cron" | "next_run_time">[];
+    ensureEnv();
+    
+    // Create lockfile
+    writeFileSync(DAEMON_LOCK_PATH, process.pid.toString());
+    
+    const db = createDb();
+    const repo = new JobRepository(db);
+
+    // Cleanup stale running tasks
+    repo.cleanupStaleJobs();
+
+    const allJobs = repo.getAll();
 
     console.log("========================================");
     console.log("       PyRunner Daemon Started");
@@ -88,53 +68,37 @@ export async function runDaemon() {
     });
     console.log("----------------------------------------");
 
-    // Initial tick for catch-up
-    await tick(db, true);
-
-    // Poll using a safer recursive timeout
+    // Poll using a safer recursive timeout with dynamic interval
     let tickTimer: Timer | null = null;
-    const scheduleNextTick = () => {
-      tickTimer = setTimeout(async () => {
-        await tick(db, false);
-        scheduleNextTick();
-      }, HEARTBEAT_INTERVAL);
+    const scheduleNextTick = async (isInitial: boolean = false) => {
+      const msUntilNext = await tick(repo, isInitial);
+      
+      // Cap at 1 minute to stay responsive to DB changes/new jobs
+      const sleepTime = Math.min(msUntilNext, 60000); 
+
+      tickTimer = setTimeout(() => {
+        scheduleNextTick(false);
+      }, sleepTime);
     };
+
+    await scheduleNextTick(true);
 
     // Graceful shutdown handler
     const cleanup = () => {
+      logger.info("Daemon shutting down...");
       if (tickTimer) clearTimeout(tickTimer);
-      console.log("\n[Info] Shutting down daemon...");
-      
-      const runningJobs = db.prepare("SELECT name, pid FROM jobs WHERE status = 'running' AND pid IS NOT NULL").all() as { name: string, pid: number }[];
-      if (runningJobs.length > 0) {
-        console.log(`[Info] Terminating ${runningJobs.length} running tasks...`);
-        for (const job of runningJobs) {
-          try {
-            process.kill(job.pid, "SIGTERM");
-            console.log(` - Terminated: ${job.name} (PID: ${job.pid})`);
-          } catch (e) {
-            // Process might have already exited
-          }
-        }
-        db.prepare("UPDATE jobs SET status = 'idle', pid = NULL WHERE status = 'running'").run();
-      }
-      
+      try {
+        unlinkSync(DAEMON_LOCK_PATH);
+      } catch {}
       db.close();
-      console.log("[Info] Daemon stopped. Goodbye!");
       process.exit(0);
     };
 
     process.on("SIGINT", cleanup);
     process.on("SIGTERM", cleanup);
 
-    scheduleNextTick();
   } catch (error) {
-    console.error("Failed to start daemon:", error);
+    logger.error("Failed to start daemon:", error);
     process.exit(1);
   }
-}
-
-// If this file is run directly
-if (import.meta.path === Bun.main) {
-  runDaemon();
 }

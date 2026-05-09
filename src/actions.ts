@@ -1,47 +1,43 @@
 import { resolve, dirname, join } from "node:path";
 import { existsSync } from "node:fs";
-import { isDaemonActive, type Job, JobStatus } from "./db";
+import { isDaemonActive, JobStatus, type JobRepository } from "./db";
 import { executeJob } from "./executor";
-import { LOGS_DIR } from "./config";
-import { type Database } from "bun:sqlite";
-import { calculateNextRun, decodeOutput } from "./utils";
+import { LOGS_DIR, DEFAULT_TIMEOUT } from "./config";
+import { logger, calculateNextRun, killProcessTree, decodeOutput } from "./utils";
 
-export function addJob(db: Database, name: string, script: string, cron: string, options?: { timeout?: string }) {
+export function addJob(repo: JobRepository, name: string, script: string, cron: string) {
   const absolutePath = resolve(process.cwd(), script);
   const workingDir = dirname(absolutePath);
 
   if (!existsSync(absolutePath)) {
-    console.error(`Error: Script not found at ${absolutePath}`);
-    process.exit(1);
+    throw new Error(`Script not found at ${absolutePath}`);
   }
-
-  const timeout = options?.timeout ? parseInt(options.timeout) : 600;
 
   try {
     const nextRun = calculateNextRun(cron);
-    db.prepare(
-      `
-      INSERT INTO jobs (name, script_path, working_dir, cron, timeout, next_run_time, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `,
-    ).run(name, absolutePath, workingDir, cron, timeout, nextRun, Date.now());
+    repo.add({
+      name,
+      script_path: absolutePath,
+      working_dir: workingDir,
+      cron,
+      timeout: DEFAULT_TIMEOUT,
+      next_run_time: nextRun,
+    });
 
-    console.log(`Task '${name}' added successfully using cron: '${cron}'`);
-    console.log(`Next run: ${new Date(nextRun).toLocaleString()}`);
+    logger.success(`Task '${name}' added successfully using cron: '${cron}'`);
+    logger.info(`Next run: ${new Date(nextRun).toLocaleString()}`);
   } catch (e) {
     if (e instanceof Error && e.message.includes("UNIQUE constraint failed")) {
-      console.error(`Error: A task named '${name}' already exists.`);
-    } else {
-      console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
+      throw new Error(`A task named '${name}' already exists.`);
     }
-    process.exit(1);
+    throw e;
   }
 }
 
-export function listJobs(db: Database) {
-  const jobs = db.query("SELECT * FROM jobs").all() as Job[];
+export function listJobs(repo: JobRepository) {
+  const jobs = repo.getAll();
 
-  if (isDaemonActive(db)) {
+  if (isDaemonActive()) {
     console.log(`\x1b[32m● Scheduler is active\x1b[0m\n`);
   } else {
     console.log(
@@ -58,11 +54,9 @@ export function listJobs(db: Database) {
     jobs.map((j) => {
       const scriptExists = existsSync(j.script_path);
       return {
-        ID: j.id,
         Name: j.name,
         Status: j.status + (scriptExists ? "" : " (MISSING)"),
         Cron: j.cron,
-        Timeout: (j.timeout ?? 600) + "s",
         "Next Run": new Date(j.next_run_time).toLocaleString(),
         "Last Run": j.last_run_time
           ? new Date(j.last_run_time).toLocaleString()
@@ -72,178 +66,107 @@ export function listJobs(db: Database) {
   );
 }
 
-export function removeJob(db: Database, name: string) {
-  const result = db.prepare("DELETE FROM jobs WHERE name = ?").run(name);
-  if (result.changes > 0) {
-    console.log(`Task '${name}' removed.`);
+export function removeJob(repo: JobRepository, name: string) {
+  if (repo.delete(name)) {
+    logger.success(`Task '${name}' removed.`);
   } else {
-    console.log(`Task '${name}' not found.`);
+    logger.warn(`Task '${name}' not found.`);
   }
 }
 
-export function stopJob(db: Database, name?: string) {
+export async function stopJob(repo: JobRepository, name?: string) {
   if (name) {
-    const job = db
-      .prepare("SELECT * FROM jobs WHERE name = ?")
-      .get(name) as Job | null;
-
-    if (!job) {
-      console.error(`Error: Task '${name}' not found.`);
-      process.exit(1);
-    }
-
-    if (job.status !== "running") {
-      console.log(`Task '${name}' is not currently running.`);
+    const job = repo.getByName(name);
+    if (!job) throw new Error(`Task '${name}' not found.`);
+    if (job.status !== JobStatus.Running || !job.pid) {
+      logger.info(`Task '${name}' is not currently running.`);
       return;
     }
 
-    if (job.pid) {
-      try {
-        process.kill(job.pid, "SIGTERM");
-        console.log(`Sent stop signal to task '${name}' (PID: ${job.pid}).`);
-      } catch (e) {
-        if (e instanceof Error && "code" in e && e.code === "ESRCH") {
-          console.log(`Process for task '${name}' already exited.`);
-        } else {
-          console.error(`Failed to kill process: ${e instanceof Error ? e.message : String(e)}`);
-        }
-      }
-    }
-
-    db.prepare(
-      "UPDATE jobs SET status = 'idle', pid = NULL WHERE name = ?",
-    ).run(name);
-    console.log(`Task '${name}' status reset to idle.`);
+    logger.info(`Stopping task '${name}' (PID: ${job.pid})...`);
+    await killProcessTree(job.pid);
+    repo.finalize(job.id!, -1, job.next_run_time, JobStatus.Idle);
+    logger.success(`Task '${name}' stopped.`);
   } else {
-    const runningJobs = db
-      .query("SELECT * FROM jobs WHERE status = 'running'")
-      .all() as Job[];
-
-    if (runningJobs.length === 0) {
-      console.log("No tasks are currently running.");
-      return;
-    }
-
-    console.log(`Stopping ${runningJobs.length} running tasks...`);
-    runningJobs.forEach((job) => {
-      if (job.pid) {
-        try {
-          process.kill(job.pid, "SIGTERM");
-          console.log(` - Stopped: ${job.name} (PID: ${job.pid})`);
-        } catch (e) {
-          // Ignore if already dead
-        }
-      }
-    });
-
-    db.prepare(
-      "UPDATE jobs SET status = 'idle', pid = NULL WHERE status = 'running'",
-    ).run();
-    console.log("All running tasks have been stopped.");
-  }
-}
-
-export async function runJob(db: Database, name?: string) {
-  if (name) {
-    const job = db
-      .prepare("SELECT * FROM jobs WHERE name = ?")
-      .get(name) as Job | null;
-
-    if (!job) {
-      console.error(`Error: Task '${name}' not found.`);
-      process.exit(1);
-    }
-
-    if (job.status === "running") {
-      console.error(
-        `Error: Task '${name}' is already running (PID: ${job.pid}).`,
-      );
-      process.exit(1);
-    }
-
-    console.log(`Manually triggering task: ${name}...`);
-    await executeJob(db, job, false);
-  } else {
-    const jobs = db
-      .query("SELECT * FROM jobs WHERE status != 'running'")
-      .all() as Job[];
-
+    const jobs = repo.getAll().filter(j => j.status === JobStatus.Running && j.pid);
     if (jobs.length === 0) {
-      console.log("No idle tasks found to run.");
+      logger.info("No running tasks to stop.");
       return;
     }
 
-    console.log(`🚀 Manually triggering ${jobs.length} idle tasks...\n`);
+    logger.info(`Stopping ${jobs.length} running tasks...`);
+    for (const job of jobs) {
+      logger.info(` - Stopping '${job.name}' (PID: ${job.pid})...`);
+      await killProcessTree(job.pid!);
+      repo.finalize(job.id!, -1, job.next_run_time, JobStatus.Idle);
+    }
+    logger.success(`Stopped all tasks.`);
+  }
+}
+
+export async function runJob(repo: JobRepository, name?: string) {
+  if (name) {
+    const job = repo.getByName(name);
+    if (!job) throw new Error(`Task '${name}' not found.`);
+
+    if (job.status === JobStatus.Running) {
+      logger.warn(`Task '${name}' is already running.`);
+      return;
+    }
+
+    logger.info(`Manually triggering task: ${name}...`);
+    await executeJob(repo, job, false, { truncateLog: true });
+  } else {
+    const jobs = repo.getAll().filter(j => j.status !== JobStatus.Running);
+    if (jobs.length === 0) {
+      logger.info("No idle tasks found to run.");
+      return;
+    }
+
+    logger.info(`🚀 Manually triggering ${jobs.length} idle tasks...\n`);
+    // Run them in parallel but handle errors gracefully
     await Promise.all(
       jobs.map((job) => {
-        return executeJob(db, job, false).catch((err) => {
-          console.error(`Error executing task ${job.name}:`, err);
+        return executeJob(repo, job, false, { truncateLog: true }).catch((err) => {
+          logger.error(`Error executing task ${job.name}:`, err);
         });
-      }),
+      })
     );
-    console.log("\nAll triggered tasks have completed.");
+    logger.info("\nAll triggered tasks have completed.");
   }
 }
 
-export function editJob(db: Database, name: string, options: { script?: string; cron?: string; timeout?: string }) {
-  const job = db
-    .prepare("SELECT * FROM jobs WHERE name = ?")
-    .get(name) as Job | null;
+export function editJob(repo: JobRepository, name: string, options: { script?: string; cron?: string }) {
+  const job = repo.getByName(name);
+  if (!job) throw new Error(`Task '${name}' not found.`);
 
-  if (!job) {
-    console.error(`Error: Task '${name}' not found.`);
-    process.exit(1);
+  const updates: Partial<Pick<Job, "script_path" | "working_dir" | "cron" | "next_run_time">> = {};
+
+  if (options.script) {
+    const absPath = resolve(process.cwd(), options.script);
+    if (!existsSync(absPath)) throw new Error(`Script not found at ${absPath}`);
+    updates.script_path = absPath;
+    updates.working_dir = dirname(absPath);
   }
 
-  if (!options.script && !options.cron && !options.timeout) {
-    console.log("No changes specified. Use --script, --cron or --timeout.");
+  if (options.cron) {
+    updates.cron = options.cron;
+    updates.next_run_time = calculateNextRun(options.cron);
+  }
+
+  if (Object.keys(updates).length === 0) {
+    logger.info("No changes specified.");
     return;
   }
 
-  let scriptPath = job.script_path;
-  let workingDir = job.working_dir;
-  let cron = job.cron;
-  let timeout = job.timeout || 600;
-  let nextRun = job.next_run_time;
-
-  if (options.script) {
-    scriptPath = resolve(process.cwd(), options.script);
-    workingDir = dirname(scriptPath);
-    if (!existsSync(scriptPath)) {
-      console.error(`Error: New script not found at ${scriptPath}`);
-      process.exit(1);
-    }
-  }
-
-  if (options.cron) {
-    cron = options.cron;
-    try {
-      nextRun = calculateNextRun(cron);
-    } catch (e) {
-      console.error(`Error: Invalid cron expression '${cron}'`);
-      process.exit(1);
-    }
-  }
-
-  if (options.timeout) {
-    timeout = parseInt(options.timeout);
-  }
-
-  db.prepare(
-    `
-    UPDATE jobs 
-    SET script_path = ?, working_dir = ?, cron = ?, timeout = ?, next_run_time = ? 
-    WHERE name = ?
-  `,
-  ).run(scriptPath, workingDir, cron, timeout, nextRun, name);
-
-  console.log(`Task '${name}' updated successfully.`);
-  if (options.cron) {
-    console.log(`New next run: ${new Date(nextRun).toLocaleString()}`);
-  }
+  repo.update(name, updates);
+  logger.success(`Task '${name}' updated.`);
 }
 
-export async function showLogs(db: Database, name?: string, options?: { tail?: string }) {
+/**
+ * Intelligent log viewer.
+ */
+export async function showLogs(repo: JobRepository, name?: string, options?: { lines?: string }) {
   async function printLogTail(filePath: string, taskName: string, tailLines?: number) {
     if (!existsSync(filePath)) {
       if (!tailLines) process.stdout.write(`--- [${taskName}] ---\n(No logs found)\n\n`);
@@ -255,8 +178,7 @@ export async function showLogs(db: Database, name?: string, options?: { tail?: s
     const start = Math.max(0, file.size - bufferSize);
     const blob = file.slice(start);
     const buffer = new Uint8Array(await blob.arrayBuffer());
-    
-    // Use the smart decoder to handle potential GBK/UTF-8 mix
+
     const content = decodeOutput(buffer);
     const lines = content.trim().split("\n");
 
@@ -283,17 +205,18 @@ export async function showLogs(db: Database, name?: string, options?: { tail?: s
   }
 
   if (!name) {
-    const jobs = db.query("SELECT name FROM jobs").all() as { name: string }[];
+    const jobs = repo.getAll();
     if (jobs.length === 0) {
-      console.log("No tasks found.");
+      logger.info("No tasks found.");
       return;
     }
-    console.log("=== Last Execution Logs for All Tasks ===\n");
+    process.stdout.write("\x1b[36m=== Last Execution Logs for All Tasks ===\x1b[0m\n\n");
     for (const job of jobs) {
       await printLogTail(join(LOGS_DIR, `${job.name}.log`), job.name);
     }
-    return;
+  } else {
+    const job = repo.getByName(name);
+    if (!job) throw new Error(`Task '${name}' not found.`);
+    await printLogTail(join(LOGS_DIR, `${name}.log`), name, options?.lines ? parseInt(options.lines) : undefined);
   }
-
-  await printLogTail(join(LOGS_DIR, `${name}.log`), name, options?.tail ? parseInt(options.tail) : undefined);
 }

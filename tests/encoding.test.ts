@@ -1,62 +1,88 @@
 import { expect, test, describe, afterAll } from "bun:test";
-import { decodeOutput } from "../src/utils";
-import { writeFileSync, readFileSync, unlinkSync, existsSync } from "node:fs";
+import { writeFileSync, readFileSync, existsSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-describe("Encoding Handling", () => {
-  const tempLogFile = join(tmpdir(), `test_encoding_${Date.now()}.log`);
+const JOB_NAME = "test_encoding_" + Date.now();
+const SCRIPT_PATH = join(tmpdir(), `${JOB_NAME}.py`);
+const TEST_DB = join(tmpdir(), `test_encoding_${Date.now()}.sqlite`);
+// Use 'bun run' to test the source code directly in an integration-like manner
+// This is cross-platform and doesn't require a pre-built binary.
+const CLI_ENTRY = join(import.meta.dir, "..", "src", "cli.ts");
+const LOG_PATH = join(process.env.USERPROFILE || process.env.HOME || "", ".pyrunner", "logs", `${JOB_NAME}.log`);
 
-  afterAll(() => {
-    if (existsSync(tempLogFile)) {
-      unlinkSync(tempLogFile);
+const POEM = `
+春江潮水连海平，海上明月共潮生。
+滟滟随波千万里，何处春江无月明？
+...
+斜月沉沉藏海雾，碣石潇湘无限路。
+不知乘月几人归，落月摇情满江树。`;
+
+const cleanup = () => {
+  const targets = [SCRIPT_PATH, LOG_PATH, TEST_DB, `${TEST_DB}-shm`, `${TEST_DB}-wal`];
+  for (const p of targets) {
+    try {
+      if (existsSync(p)) unlinkSync(p);
+    } catch {}
+  }
+};
+
+async function run(...args: string[]): Promise<{ stdout: string; exitCode: number }> {
+  // Use bun to run the source code, simulating a real CLI call
+  const proc = Bun.spawn(["bun", CLI_ENTRY, ...args], { 
+    stdout: "pipe", 
+    stderr: "pipe",
+    env: {
+      ...process.env,
+      PYRUNNER_DB_PATH: TEST_DB,
+      NODE_ENV: "production" // Force non-test mode behavior
     }
   });
+  const exitCode = await proc.exited;
+  return { stdout: await new Response(proc.stdout).text(), exitCode };
+}
 
-  test("Decodes UTF-8 Chinese characters", () => {
-    // "你好" in UTF-8
-    const utf8Bytes = new Uint8Array([0xe4, 0xbd, 0xa0, 0xe5, 0xa5, 0xbd]);
-    expect(decodeOutput(utf8Bytes)).toBe("你好");
-  });
+describe("Encoding Integration (Source-based)", () => {
+  afterAll(cleanup);
 
-  test("Decodes GBK Chinese characters (fallback)", () => {
-    // "你好" in GBK
-    const gbkBytes = new Uint8Array([0xc4, 0xe3, 0xba, 0xc3]);
-    expect(decodeOutput(gbkBytes)).toBe("你好");
-  });
+  test("UTF-8 Pipeline Integrity", async () => {
+    // 1. Create a Python script that outputs raw UTF-8 bytes
+    writeFileSync(SCRIPT_PATH, [
+      "import sys",
+      "sys.stdout.buffer.write(\"\"\"" + POEM + "\"\"\".encode('utf-8'))",
+    ].join("\n"));
 
-  test("Integration: Process Output -> Log File -> Read Logs", () => {
-    // 1. Simulate process outputting GBK (typical on legacy Windows)
-    const gbkOutput = new Uint8Array([
-      0xc4, 0xe3, 0xba, 0xc3, 0x20, 0x57, 0x6f, 0x72, 0x6c, 0x64,
-    ]); // "你好 World" in GBK
+    // 2. Add the job (Testing DB Persistence)
+    const addRes = await run("add", JOB_NAME, SCRIPT_PATH, "* * * * *");
+    expect(addRes.exitCode).toBe(0);
+    
+    // 3. Run the job (Testing Process Capture & Log Writing)
+    const runRes = await run("run", JOB_NAME);
+    expect(runRes.exitCode).toBe(0);
 
-    // 2. Decode it (as pyrunner does)
-    const decoded = decodeOutput(gbkOutput);
-    expect(decoded).toBe("你好 World");
+    // 4. Verify the log file on disk is valid UTF-8
+    expect(existsSync(LOG_PATH)).toBe(true);
+    const raw = readFileSync(LOG_PATH);
+    let decoded: string;
+    try {
+      decoded = new TextDecoder("utf-8", { fatal: true }).decode(new Uint8Array(raw));
+    } catch {
+      throw new Error("Log file contains invalid UTF-8 bytes - the encoding pipeline is broken.");
+    }
 
-    // 3. Write to log file (UTF-8 is default in Node/Bun)
-    writeFileSync(tempLogFile, decoded);
+    // 5. Verify content integrity
+    for (const line of POEM.split("\n")) {
+      if (line.trim()) expect(decoded).toContain(line.trim());
+    }
 
-    // 4. Read back from log file
-    const buffer = readFileSync(tempLogFile);
-    const content = decodeOutput(buffer);
+    // 6. Verify CLI 'logs' command output
+    const logCmdRes = await run("logs", JOB_NAME);
+    expect(logCmdRes.exitCode).toBe(0);
+    for (const line of POEM.split("\n")) {
+      if (line.trim()) expect(logCmdRes.stdout).toContain(line.trim());
+    }
 
-    expect(content).toBe("你好 World");
-  });
-
-  test("Handles empty buffer", () => {
-    expect(decodeOutput(new Uint8Array([]))).toBe("");
-  });
-
-  test("Decodes ASCII characters correctly", () => {
-    const asciiBytes = new Uint8Array([0x48, 0x65, 0x6c, 0x6c, 0x6f]); // "Hello"
-    expect(decodeOutput(asciiBytes)).toBe("Hello");
-  });
-
-  test("Fallback to non-fatal UTF-8 for completely invalid sequences", () => {
-    const invalidBytes = new Uint8Array([0xff, 0xff]);
-    const result = decodeOutput(invalidBytes);
-    expect(typeof result).toBe("string");
+    // 7. Cleanup (Testing DB Removal)
+    await run("remove", JOB_NAME);
   });
 });
