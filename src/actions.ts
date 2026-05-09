@@ -28,11 +28,11 @@ export function addJob(db: Database, name: string, script: string, cron: string,
 
     console.log(`Task '${name}' added successfully using cron: '${cron}'`);
     console.log(`Next run: ${new Date(nextRun).toLocaleString()}`);
-  } catch (e: any) {
-    if (e.message.includes("UNIQUE constraint failed")) {
+  } catch (e) {
+    if (e instanceof Error && e.message.includes("UNIQUE constraint failed")) {
       console.error(`Error: A task named '${name}' already exists.`);
     } else {
-      console.error(`Error: ${e.message}`);
+      console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
     }
     process.exit(1);
   }
@@ -101,11 +101,11 @@ export function stopJob(db: Database, name?: string) {
       try {
         process.kill(job.pid, "SIGTERM");
         console.log(`Sent stop signal to task '${name}' (PID: ${job.pid}).`);
-      } catch (e: any) {
-        if (e.code === "ESRCH") {
+      } catch (e) {
+        if (e instanceof Error && "code" in e && e.code === "ESRCH") {
           console.log(`Process for task '${name}' already exited.`);
         } else {
-          console.error(`Failed to kill process: ${e.message}`);
+          console.error(`Failed to kill process: ${e instanceof Error ? e.message : String(e)}`);
         }
       }
     }
@@ -219,7 +219,7 @@ export function editJob(db: Database, name: string, options: { script?: string; 
     cron = options.cron;
     try {
       nextRun = calculateNextRun(cron);
-    } catch (e: any) {
+    } catch (e) {
       console.error(`Error: Invalid cron expression '${cron}'`);
       process.exit(1);
     }

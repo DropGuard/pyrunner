@@ -30,17 +30,17 @@ describe("Daemon Tick & Job Triggering (with DI)", () => {
     await tick(db);
 
     expect(executeSpy).toHaveBeenCalled();
-    const job = db.query("SELECT * FROM jobs WHERE name = 'due_job'").get() as any;
+    const job = db.query("SELECT * FROM jobs WHERE name = 'due_job'").get() as Job;
     expect(job.status).toBe("running");
 
     executeSpy.mockRestore();
-  });
+    });
 
-  test("tick() should NOT pick up jobs that are not yet due", async () => {
+    test("tick() should NOT pick up jobs that are not yet due", async () => {
     const now = Date.now();
-    
+
     db.prepare(`
-      INSERT INTO jobs (name, script_path, working_dir, cron, next_run_time, status, created_at)
+      INSERT INTO jobs (name, script_path, working_dir, cron, next_run_time, status, created_at)   
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `).run("future_job", "test.py", ".", "* * * * *", now + 100000, "idle", now);
 
@@ -49,12 +49,11 @@ describe("Daemon Tick & Job Triggering (with DI)", () => {
     await tick(db);
 
     expect(executeSpy).not.toHaveBeenCalled();
-    const job = db.query("SELECT * FROM jobs WHERE name = 'future_job'").get() as any;
+    const job = db.query("SELECT * FROM jobs WHERE name = 'future_job'").get() as Job;
     expect(job.status).toBe("idle");
 
     executeSpy.mockRestore();
-  });
-
+    });
   test("tick() should NOT pick up jobs that are already running", async () => {
     const now = Date.now();
     

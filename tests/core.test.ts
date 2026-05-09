@@ -24,7 +24,7 @@ describe("PyRunner Actions (Integration with DI)", () => {
   });
 
   test("Database should have WAL mode enabled", () => {
-    const mode = db.prepare("PRAGMA journal_mode").get() as any;
+    const mode = db.prepare("PRAGMA journal_mode").get() as { journal_mode: string };
     const currentMode = mode.journal_mode.toLowerCase();
     expect(["wal", "memory"]).toContain(currentMode);
   });
@@ -52,7 +52,7 @@ describe("PyRunner Actions (Integration with DI)", () => {
 
     actions.addJob(db, "unit_test_job", testScript, "0 9 * * *");
     
-    const job = db.query("SELECT * FROM jobs WHERE name = ?").get("unit_test_job") as any;
+    const job = db.query("SELECT * FROM jobs WHERE name = ?").get("unit_test_job") as Job;
     
     expect(job).toBeDefined();
     expect(job.name).toBe("unit_test_job");
@@ -69,7 +69,7 @@ describe("PyRunner Actions (Integration with DI)", () => {
 
     actions.editJob(db, "edit_test", { script: nextScript, cron: "1 10 * * *" });
 
-    const job = db.query("SELECT * FROM jobs WHERE name = ?").get("edit_test") as any;
+    const job = db.query("SELECT * FROM jobs WHERE name = ?").get("edit_test") as Job;
     expect(job.cron).toBe("1 10 * * *");
     expect(job.script_path).toContain("next.py");
 
@@ -94,7 +94,7 @@ describe("PyRunner Actions (Integration with DI)", () => {
 
     actions.stopJob(db, "stop_test");
 
-    const job = db.query("SELECT * FROM jobs WHERE name = ?").get("stop_test") as any;
+    const job = db.query("SELECT * FROM jobs WHERE name = ?").get("stop_test") as Job;
     expect(job.status).toBe("idle");
     expect(job.pid).toBeNull();
     expect(killSpy).toHaveBeenCalled();

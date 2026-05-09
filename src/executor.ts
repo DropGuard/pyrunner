@@ -99,9 +99,15 @@ export async function executeJob(db: Database, job: Job, isCatchup: boolean = fa
     console.log(
       `[${new Date().toLocaleString()}] Finished job: ${job.name} (Exit: ${exitCode})`,
     );
-  } catch (error: any) {
+  } catch (error) {
     if (timeoutTimer) clearTimeout(timeoutTimer);
-    handleExecutionError(db, job, logPath, error, baseTimeForNextRun);
+    handleExecutionError(
+      db,
+      job,
+      logPath,
+      error instanceof Error ? error : new Error(String(error)),
+      baseTimeForNextRun,
+    );
   }
 }
 
@@ -158,7 +164,7 @@ function handleExecutionError(
   db: Database,
   job: Job,
   logPath: string,
-  error: any,
+  error: Error,
   baseTime: number,
 ) {
   const endTime = Date.now();

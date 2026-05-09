@@ -17,7 +17,8 @@ try {
     console.error("❌ Build failed:", result.stderr.toString());
     process.exit(1);
   }
-} catch (e: any) {
-  console.error("❌ Build error:", e.message);
-  process.exit(1);
+} catch (e) {
+console.error("❌ Build error:", e instanceof Error ? e.message : String(e));
+process.exit(1);
 }
+

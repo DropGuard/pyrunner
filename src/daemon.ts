@@ -74,7 +74,7 @@ export async function runDaemon() {
 
     const allJobs = db
       .query("SELECT name, cron, next_run_time FROM jobs")
-      .all() as any[];
+      .all() as Pick<Job, "name" | "cron" | "next_run_time">[];
 
     console.log("========================================");
     console.log("       PyRunner Daemon Started");
