@@ -1,4 +1,3 @@
-#!/usr/bin/env bun
 import { Command } from "commander";
 import { ensureEnv } from "./config";
 import { runDaemon } from "./daemon";
