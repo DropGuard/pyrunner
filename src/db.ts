@@ -91,10 +91,21 @@ export function createDb(path: string = DB_PATH): Database {
 }
 
 export function isDaemonActive(db: Database): boolean {
-  const heartbeat = db
-    .prepare("SELECT updated_at FROM system_stats WHERE key = ?")
-    .get("daemon_heartbeat") as { updated_at: number } | null;
+  const row = db
+    .prepare("SELECT value FROM system_stats WHERE key = ?")
+    .get("daemon_pid") as { value: string } | null;
 
-  if (!heartbeat) return false;
-  return Date.now() - heartbeat.updated_at < HEARTBEAT_THRESHOLD;
+  if (!row) return false;
+  const pid = parseInt(row.value);
+  if (isNaN(pid)) return false;
+
+  try {
+    // Signal 0 is used to check if a process exists
+    process.kill(pid, 0);
+    return true;
+  } catch (e: any) {
+    // ESRCH means process not found
+    // EPERM means process exists but we don't have permission (still active)
+    return e.code === "EPERM";
+  }
 }
