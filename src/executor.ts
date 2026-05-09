@@ -60,16 +60,15 @@ export async function executeJob(db: Database, job: Job, isCatchup: boolean = fa
       appendFileSync(logPath, `\nERROR: Job timed out after ${timeoutMs / 1000}s and was killed.\n`);
     }, timeoutMs);
 
-    // Streaming stdout/stderr to file efficiently
-    const writer = Bun.file(logPath).writer({ append: true });
+    // Streaming stdout/stderr to file
     const streamToLog = async (stream: ReadableStream) => {
       const reader = stream.getReader();
       try {
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
-          // We write raw bytes for speed, but this assumes reader can handle encoding
-          writer.write(value);
+          // Standard Node-style append is more reliable for simple logging
+          appendFileSync(logPath, value);
         }
       } finally {
         reader.releaseLock();
@@ -82,8 +81,6 @@ export async function executeJob(db: Database, job: Job, isCatchup: boolean = fa
       streamToLog(proc.stdout),
       streamToLog(proc.stderr),
     ]);
-
-    await writer.end();
 
     if (timeoutTimer) clearTimeout(timeoutTimer);
 

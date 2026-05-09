@@ -1,5 +1,5 @@
 import { expect, test, describe, beforeEach, afterEach, spyOn } from "bun:test";
-import { createDb } from "../src/db";
+import { createDb, type Job, JobStatus } from "../src/db";
 import * as actions from "../src/actions";
 import { writeFileSync, unlinkSync, existsSync } from "node:fs";
 import { join } from "node:path";
@@ -95,7 +95,7 @@ describe("PyRunner Actions (Integration with DI)", () => {
     actions.stopJob(db, "stop_test");
 
     const job = db.query("SELECT * FROM jobs WHERE name = ?").get("stop_test") as Job;
-    expect(job.status).toBe("idle");
+    expect(job.status).toBe(JobStatus.Idle);
     expect(job.pid).toBeNull();
     expect(killSpy).toHaveBeenCalled();
     

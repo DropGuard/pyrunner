@@ -270,7 +270,7 @@ export async function showLogs(db: Database, name?: string, options?: { tail?: s
       let startIndex = -1;
       for (let i = lines.length - 1; i >= 0; i--) {
         const line = lines[i];
-        if (line.includes("--- RUN STARTED AT") || line.includes("--- RUN FAILED AT")) {
+        if (line && (line.includes("--- RUN STARTED AT") || line.includes("--- RUN FAILED AT"))) {
           startIndex = i;
           break;
         }

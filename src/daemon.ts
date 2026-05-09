@@ -30,11 +30,8 @@ export async function tick(db: Database, isInitial: boolean = false) {
       for (const job of dueJobs) {
         // Atomic status update
         const updated = db.prepare(
-          "UPDATE jobs SET status = $running WHERE id = $id AND status != $running RETURNING *"
-        ).get({
-          $id: job.id,
-          $running: JobStatus.Running
-        }) as Job | null;
+          "UPDATE jobs SET status = ? WHERE id = ? AND status != ? RETURNING *"
+        ).get(JobStatus.Running, job.id!, JobStatus.Running) as Job | null;
 
         if (updated) {
           executeJob(db, updated, isInitial).catch((err) => {
