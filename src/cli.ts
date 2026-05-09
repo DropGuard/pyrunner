@@ -110,16 +110,28 @@ program
   .action(wrapAction((name) => actions.removeJob(repo, name)));
 
 program
+  .command("start")
+  .alias("daemon")
+  .description("Start the scheduler daemon")
+  .option("--hidden", "Hide console window (Windows only)")
+  .action(wrapAction((options) => runDaemon(options)));
+
+program
   .command("stop")
-  .description("Stop a running task")
-  .argument("[name]", "Name of the task (omit to stop all)")
-  .action(wrapAction((name) => actions.stopJob(repo, name)));
+  .description("Stop the scheduler daemon")
+  .action(wrapAction(() => actions.stopDaemon()));
 
 program
   .command("run")
   .description("Run a task immediately")
   .argument("[name]", "Name of the task")
   .action(wrapAction((name) => actions.runJob(repo, name)));
+
+program
+  .command("kill")
+  .description("Kill running tasks")
+  .argument("[name]", "Name of the task (omit to kill all)")
+  .action(wrapAction((name) => actions.killTasks(repo, name)));
 
 program
   .command("logs")
@@ -135,12 +147,6 @@ program
   .option("-s, --script <path>", "New script path")
   .option("-c, --cron <expression>", "New cron expression")
   .action(wrapAction((name, options) => actions.editJob(repo, name, options)));
-
-program
-  .command("daemon")
-  .description("Start the scheduler daemon")
-  .option("--hidden", "Hide console window (Windows only)")
-  .action(wrapAction((options) => runDaemon(options)));
 
 program
   .command("install")

@@ -47,7 +47,7 @@ pyrunner list
 ### 3. Run the Daemon
 To start executing tasks, run the daemon:
 ```bash
-pyrunner daemon
+pyrunner start
 ```
 
 ### 4. Install as a System Service
@@ -55,6 +55,9 @@ Run PyRunner automatically in the background when your system starts:
 ```bash
 # Install the service
 pyrunner install
+
+# To stop the service
+pyrunner stop
 
 # To remove it later
 pyrunner uninstall
@@ -82,8 +85,9 @@ To ensure reliability and prevent data corruption, PyRunner enforces a strict **
 | `edit <name>` | Update a task's script, cron, or timeout. |
 | `remove <name>` / `rm` | Delete a scheduled task. |
 | `run <name>` | Run a task immediately (manual trigger). |
-| `stop [name]` | Stop a specific running task or all tasks. |
-| `daemon [--hidden]` | Start the scheduler (use `--hidden` on Windows for background). |
+| `kill [name]` | Kill a specific running task or all tasks. |
+| `start` / `daemon` | Start the scheduler (use `--hidden` on Windows for background). |
+| `stop` | Stop the scheduler daemon. |
 | `install` | Register PyRunner as a system-level background service. |
 | `uninstall` | Remove the registered system service. |
 

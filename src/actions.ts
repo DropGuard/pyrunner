@@ -2,7 +2,7 @@ import { resolve, dirname, join } from "node:path";
 import { existsSync } from "node:fs";
 import { isDaemonActive, JobStatus, type JobRepository } from "./db";
 import { executeJob } from "./executor";
-import { LOGS_DIR, DEFAULT_TIMEOUT } from "./config";
+import { LOGS_DIR, DEFAULT_TIMEOUT, DAEMON_LOCK_PATH } from "./config";
 import { logger, calculateNextRun, killProcessTree, decodeOutput } from "./utils";
 
 export function addJob(repo: JobRepository, name: string, script: string, cron: string) {
@@ -74,7 +74,26 @@ export function removeJob(repo: JobRepository, name: string) {
   }
 }
 
-export async function stopJob(repo: JobRepository, name?: string) {
+export async function stopDaemon() {
+  if (!isDaemonActive()) {
+    logger.info("Scheduler is already offline.");
+    return;
+  }
+
+  try {
+    const lockContent = await Bun.file(DAEMON_LOCK_PATH).text();
+    const pid = parseInt(lockContent.trim());
+    if (!isNaN(pid)) {
+      logger.info(`Stopping scheduler daemon (PID: ${pid})...`);
+      await killProcessTree(pid);
+      logger.success("Scheduler daemon stopped.");
+    }
+  } catch (e) {
+    logger.error("Failed to stop daemon:", e);
+  }
+}
+
+export async function killTasks(repo: JobRepository, name?: string) {
   if (name) {
     const job = repo.getByName(name);
     if (!job) throw new Error(`Task '${name}' not found.`);
@@ -83,24 +102,24 @@ export async function stopJob(repo: JobRepository, name?: string) {
       return;
     }
 
-    logger.info(`Stopping task '${name}' (PID: ${job.pid})...`);
+    logger.info(`Killing task '${name}' (PID: ${job.pid})...`);
     await killProcessTree(job.pid);
     repo.finalize(job.id!, -1, job.next_run_time, JobStatus.Idle);
-    logger.success(`Task '${name}' stopped.`);
+    logger.success(`Task '${name}' killed.`);
   } else {
     const jobs = repo.getAll().filter(j => j.status === JobStatus.Running && j.pid);
     if (jobs.length === 0) {
-      logger.info("No running tasks to stop.");
+      logger.info("No running tasks to kill.");
       return;
     }
 
-    logger.info(`Stopping ${jobs.length} running tasks...`);
+    logger.info(`Killing ${jobs.length} running tasks...`);
     for (const job of jobs) {
-      logger.info(` - Stopping '${job.name}' (PID: ${job.pid})...`);
+      logger.info(` - Killing '${job.name}' (PID: ${job.pid})...`);
       await killProcessTree(job.pid!);
       repo.finalize(job.id!, -1, job.next_run_time, JobStatus.Idle);
     }
-    logger.success(`Stopped all tasks.`);
+    logger.success(`Killed all tasks.`);
   }
 }
 

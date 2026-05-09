@@ -37,9 +37,45 @@ export async function installService() {
       const { exitCode, stderr } = await $`reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "PyRunner" /t REG_SZ /d ${hiddenCommand} /f`.nothrow().quiet();
 
       if (exitCode === 0) {
+        // Verify registry entry exists
+        const { exitCode: queryExit } = await $`reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "PyRunner"`.nothrow().quiet();
+        if (queryExit !== 0) {
+          logger.error("[Windows] Registered auto-start entry but verification failed.");
+          return;
+        }
         logger.success("[Windows] Registered auto-start entry in Registry.");
-        await $`start /b ${{ raw: hiddenCommand }}`.nothrow().quiet();
-        logger.success("[Windows] Daemon started in background.");
+
+        // Spawn daemon detached
+        const args = (hiddenCommand.match(/"[^"]+"|\S+/g) || []).map(a => a.replace(/^"|"$/g, ""));
+        const proc = Bun.spawn(args, {
+          detached: true,
+          stdout: "ignore",
+          stderr: "ignore",
+        });
+        proc.unref();
+        
+        // Verify daemon started and stays running
+        let active = false;
+        for (let i = 0; i < 10; i++) {
+          await new Promise(resolve => setTimeout(resolve, 500));
+          if (isDaemonActive()) {
+            active = true;
+            break;
+          }
+        }
+
+        // Double check after a short delay to ensure it didn't crash immediately
+        if (active) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          if (!isDaemonActive()) active = false;
+        }
+
+        if (active) {
+          logger.success("[Windows] Daemon started in background.");
+        } else {
+          logger.error("[Windows] Daemon failed to start in background.");
+          console.error("[Tip] Try running 'pyrunner daemon' manually to see error messages.");
+        }
       } else {
         logger.error(`[Windows] Failed to register auto-start: ${stderr.toString()}`);
       }
