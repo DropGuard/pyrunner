@@ -102,9 +102,17 @@ export async function runDaemon() {
       if (tickTimer) clearTimeout(tickTimer);
       console.log("\n[Info] Shutting down daemon...");
       
-      const runningCount = db.prepare("SELECT COUNT(*) as count FROM jobs WHERE status = 'running'").get() as { count: number };
-      if (runningCount.count > 0) {
-        console.log(`[Info] Resetting ${runningCount.count} running tasks to idle...`);
+      const runningJobs = db.prepare("SELECT name, pid FROM jobs WHERE status = 'running' AND pid IS NOT NULL").all() as { name: string, pid: number }[];
+      if (runningJobs.length > 0) {
+        console.log(`[Info] Terminating ${runningJobs.length} running tasks...`);
+        for (const job of runningJobs) {
+          try {
+            process.kill(job.pid, "SIGTERM");
+            console.log(` - Terminated: ${job.name} (PID: ${job.pid})`);
+          } catch (e) {
+            // Process might have already exited
+          }
+        }
         db.prepare("UPDATE jobs SET status = 'idle', pid = NULL WHERE status = 'running'").run();
       }
       
@@ -125,5 +133,8 @@ export async function runDaemon() {
 
 // If this file is run directly
 if (import.meta.path === Bun.main) {
+  runDaemon();
+}
+n) {
   runDaemon();
 }

@@ -88,7 +88,7 @@ export async function executeJob(db: Database, job: Job, isCatchup: boolean = fa
     const nextRun = calculateNextRun(job.cron, baseTimeForNextRun);
     finalizeJob(db, job.id!, exitCode, nextRun, JobStatus.Idle);
 
-    appendFileSync(
+    await appendFile(
       logPath,
       `\n--- RUN FINISHED AT ${new Date().toLocaleString()} WITH EXIT CODE ${exitCode} ---\n`,
     );
@@ -173,6 +173,13 @@ async function handleExecutionError(
   const nextRun = calculateNextRun(job.cron, baseTime);
   db.prepare("UPDATE jobs SET status = ?, next_run_time = ? WHERE id = ?")
     .run(JobStatus.Failed, nextRun, job.id!);
+
+  console.error(
+    `[${new Date().toLocaleString()}] Job failed: ${job.name}`,
+    error,
+  );
+}
+xtRun, job.id!);
 
   console.error(
     `[${new Date().toLocaleString()}] Job failed: ${job.name}`,
