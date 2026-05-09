@@ -91,19 +91,34 @@ export function createDb(path: string = DB_PATH): Database {
   return d;
 }
 
+/**
+ * Checks if the daemon process is currently running using system-level process scanning.
+ * This is a "zero-write" check that doesn't rely on database heartbeats.
+ */
 export function isDaemonActive(db?: Database): boolean {
   try {
     if (process.platform === "win32") {
-      // Search for bun/node processes that have 'pyrunner' and 'daemon' in their command line
-      const cmd = `powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \\"Name = 'bun.exe' OR Name = 'node.exe' OR Name = 'pyrunner.exe'\\" | Where-Object { $_.CommandLine -like '*pyrunner*daemon*' } | Select-Object -ExpandProperty ProcessId"`;
-      const out = execSync(cmd, { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
-      return out.length > 0;
+      // Robust Windows check: Use WMIC to find any process whose command line contains both 'pyrunner' and 'daemon'.
+      // This avoids issues with different executable names (bun.exe, node.exe, pyrunner.exe, etc.)
+      const cmd = 'wmic process where "commandline like \'%pyrunner%daemon%\'" get processid /format:list';
+      const out = execSync(cmd, { stdio: ["ignore", "pipe", "ignore"], encoding: "utf-8" });
+      
+      // Filter out our own process if we are running 'pyrunner daemon' in the foreground
+      const pids = out.split("\n")
+        .map(line => line.trim())
+        .filter(line => line.startsWith("ProcessId="))
+        .map(line => line.split("=")[1])
+        .filter((pid): pid is string => !!pid);
+
+      return pids.some(pid => parseInt(pid) !== process.pid);
     } else {
-      // pgrep -f matches the full command line
-      execSync('pgrep -f "pyrunner.*daemon"', { stdio: "ignore" });
-      return true;
+      // Unix check: pgrep -f matches the full command line
+      const out = execSync('pgrep -f "pyrunner.*daemon"', { stdio: ["ignore", "pipe", "ignore"], encoding: "utf-8" });
+      const pids = out.trim().split("\n");
+      return pids.some(pid => parseInt(pid) !== process.pid);
     }
   } catch {
+    // If command fails or no match found, assume offline
     return false;
   }
 }
