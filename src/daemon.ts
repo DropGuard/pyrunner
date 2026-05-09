@@ -1,10 +1,10 @@
 import { ensureEnv, HEARTBEAT_INTERVAL } from "./config";
-import { getDb, type Job, JobStatus } from "./db";
+import { createDb, type Job, JobStatus } from "./db";
 import { executeJob } from "./executor";
+import { type Database } from "bun:sqlite";
 
-export async function tick(isInitial: boolean = false) {
+export async function tick(db: Database, isInitial: boolean = false) {
   try {
-    const db = getDb();
     const now = Date.now();
 
     // Update heartbeat
@@ -28,8 +28,7 @@ export async function tick(isInitial: boolean = false) {
         `[${new Date().toLocaleString()}] [${type}] Found ${dueJobs.length} due jobs. Attempting to start...`,
       );
       for (const job of dueJobs) {
-        // Atomic status update to prevent race conditions between multiple daemon instances
-        // We only pick up the job if it's still not running
+        // Atomic status update
         const updated = db.prepare(
           "UPDATE jobs SET status = $running WHERE id = $id AND status != $running RETURNING *"
         ).get({
@@ -38,9 +37,7 @@ export async function tick(isInitial: boolean = false) {
         }) as Job | null;
 
         if (updated) {
-          // We don't await executeJob here to allow parallel execution,
-          // but executeJob itself should handle its own errors.
-          executeJob(updated, isInitial).catch((err) => {
+          executeJob(db, updated, isInitial).catch((err) => {
             console.error(
               `[${new Date().toLocaleString()}] Unhandled error in job ${updated.name}:`,
               err,
@@ -60,9 +57,9 @@ export async function tick(isInitial: boolean = false) {
 export async function runDaemon() {
   try {
     ensureEnv();
-    const db = getDb();
+    const db = createDb();
 
-    // Cleanup: Reset any jobs that were left in 'running' state from a previous crash/shutdown
+    // Cleanup stale running tasks
     const runningJobs = db
       .query("SELECT * FROM jobs WHERE status = 'running'")
       .all() as Job[];
@@ -92,10 +89,37 @@ export async function runDaemon() {
     console.log("----------------------------------------");
 
     // Initial tick for catch-up
-    await tick(true);
+    await tick(db, true);
 
-    // Poll every 30 seconds
-    setInterval(() => tick(false), HEARTBEAT_INTERVAL);
+    // Poll every 30 seconds using a safer recursive timeout
+    let tickTimer: Timer | null = null;
+    const scheduleNextTick = () => {
+      tickTimer = setTimeout(async () => {
+        await tick(db, false);
+        scheduleNextTick();
+      }, HEARTBEAT_INTERVAL);
+    };
+
+    // Graceful shutdown handler
+    const cleanup = () => {
+      if (tickTimer) clearTimeout(tickTimer);
+      console.log("\n[Info] Shutting down daemon...");
+      
+      const runningCount = db.prepare("SELECT COUNT(*) as count FROM jobs WHERE status = 'running'").get() as { count: number };
+      if (runningCount.count > 0) {
+        console.log(`[Info] Resetting ${runningCount.count} running tasks to idle...`);
+        db.prepare("UPDATE jobs SET status = 'idle', pid = NULL WHERE status = 'running'").run();
+      }
+      
+      db.close();
+      console.log("[Info] Daemon stopped. Goodbye!");
+      process.exit(0);
+    };
+
+    process.on("SIGINT", cleanup);
+    process.on("SIGTERM", cleanup);
+
+    scheduleNextTick();
   } catch (error) {
     console.error("Failed to start daemon:", error);
     process.exit(1);

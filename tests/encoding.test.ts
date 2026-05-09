@@ -1,5 +1,5 @@
 import { expect, test, describe, afterAll } from "bun:test";
-import { decodeOutput } from "../src/executor";
+import { decodeOutput } from "../src/utils";
 import { writeFileSync, readFileSync, unlinkSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";

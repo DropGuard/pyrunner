@@ -23,43 +23,50 @@ export interface Job {
   created_at: number;
 }
 
-let db: Database;
+/**
+ * Creates and initializes a new database connection.
+ * @param path The path to the database file or ":memory:".
+ */
+export function createDb(path: string = DB_PATH): Database {
+  const d = new Database(path);
+  
+  // Performance and concurrency optimizations
+  d.run("PRAGMA journal_mode = WAL");
+  d.run("PRAGMA synchronous = NORMAL");
 
-export function getDb() {
-  if (!db) {
-    db = new Database(DB_PATH);
-    db.run(`
-      CREATE TABLE IF NOT EXISTS jobs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT UNIQUE,
-        script_path TEXT,
-        working_dir TEXT,
-        cron TEXT,
-        timeout INTEGER DEFAULT 600,
-        next_run_time INTEGER,
-        status TEXT DEFAULT 'idle',
-        last_run_time INTEGER,
-        last_exit_code INTEGER,
-        pid INTEGER,
-        created_at INTEGER
-      )
-    `);
-    db.run(`
-      CREATE TABLE IF NOT EXISTS system_stats (
-        key TEXT PRIMARY KEY,
-        value TEXT,
-        updated_at INTEGER
-      )
-    `);
-    db.prepare(
-      "INSERT OR IGNORE INTO system_stats (key, value, updated_at) VALUES (?, ?, ?)",
-    ).run("daemon_heartbeat", "running", Date.now());
-  }
-  return db;
+  d.run(`
+    CREATE TABLE IF NOT EXISTS jobs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT UNIQUE,
+      script_path TEXT,
+      working_dir TEXT,
+      cron TEXT,
+      timeout INTEGER DEFAULT 600,
+      next_run_time INTEGER,
+      status TEXT DEFAULT 'idle',
+      last_run_time INTEGER,
+      last_exit_code INTEGER,
+      pid INTEGER,
+      created_at INTEGER
+    )
+  `);
+  d.run("CREATE INDEX IF NOT EXISTS idx_jobs_next_run ON jobs (next_run_time)");
+  d.run("CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs (status)");
+  d.run(`
+    CREATE TABLE IF NOT EXISTS system_stats (
+      key TEXT PRIMARY KEY,
+      value TEXT,
+      updated_at INTEGER
+    )
+  `);
+  d.prepare(
+    "INSERT OR IGNORE INTO system_stats (key, value, updated_at) VALUES (?, ?, ?)",
+  ).run("daemon_heartbeat", "running", Date.now());
+
+  return d;
 }
 
-export function isDaemonActive(): boolean {
-  const db = getDb();
+export function isDaemonActive(db: Database): boolean {
   const heartbeat = db
     .prepare("SELECT updated_at FROM system_stats WHERE key = ?")
     .get("daemon_heartbeat") as { updated_at: number } | null;

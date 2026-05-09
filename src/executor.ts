@@ -1,8 +1,9 @@
 import { join } from "node:path";
 import { appendFileSync, existsSync } from "node:fs";
 import { LOGS_DIR } from "./config";
-import { getDb, type Job, JobStatus } from "./db";
-import { CronExpressionParser } from "cron-parser";
+import { type Job, JobStatus } from "./db";
+import { type Database } from "bun:sqlite";
+import { calculateNextRun } from "./utils";
 
 function runProcess(job: Job) {
   return Bun.spawn(["uv", "run", job.script_path], {
@@ -21,7 +22,7 @@ function runProcess(job: Job) {
  * Main entry point for executing a job.
  * Orchestrates the lifecycle of a job run.
  */
-export async function executeJob(job: Job, isCatchup: boolean = false) {
+export async function executeJob(db: Database, job: Job, isCatchup: boolean = false) {
   const logPath = join(LOGS_DIR, `${job.name}.log`);
   const startTime = Date.now();
   // Use the scheduled time as the base for the NEXT run calculation to avoid drift
@@ -34,12 +35,11 @@ export async function executeJob(job: Job, isCatchup: boolean = false) {
 
   // 1. Validation
   if (!existsSync(job.script_path)) {
-    return handleMissingScript(job, logPath, startTime, baseTimeForNextRun);
+    return handleMissingScript(db, job, logPath, startTime, baseTimeForNextRun);
   }
 
   // 2. Preparation
-  // Note: Atomic status update should have happened in the daemon before calling this
-  updateJobState(job.id!, JobStatus.Running, startTime);
+  updateJobState(db, job.id!, JobStatus.Running, startTime);
   appendFileSync(
     logPath,
     `\n--- RUN STARTED AT ${new Date(startTime).toLocaleString()} ---\n`,
@@ -50,7 +50,7 @@ export async function executeJob(job: Job, isCatchup: boolean = false) {
   try {
     // 3. Execution
     const proc = runProcess(job);
-    updateJobPid(job.id!, proc.pid);
+    updateJobPid(db, job.id!, proc.pid);
 
     // Setup Timeout
     const timeoutMs = (job.timeout || 600) * 1000;
@@ -60,14 +60,16 @@ export async function executeJob(job: Job, isCatchup: boolean = false) {
       appendFileSync(logPath, `\nERROR: Job timed out after ${timeoutMs / 1000}s and was killed.\n`);
     }, timeoutMs);
 
-    // Streaming stdout/stderr to file
+    // Streaming stdout/stderr to file efficiently
+    const writer = Bun.file(logPath).writer({ append: true });
     const streamToLog = async (stream: ReadableStream) => {
       const reader = stream.getReader();
       try {
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
-          appendFileSync(logPath, decodeOutput(value));
+          // We write raw bytes for speed, but this assumes reader can handle encoding
+          writer.write(value);
         }
       } finally {
         reader.releaseLock();
@@ -81,11 +83,13 @@ export async function executeJob(job: Job, isCatchup: boolean = false) {
       streamToLog(proc.stderr),
     ]);
 
+    await writer.end();
+
     if (timeoutTimer) clearTimeout(timeoutTimer);
 
     // 4. Finalization
     const nextRun = calculateNextRun(job.cron, baseTimeForNextRun);
-    finalizeJob(job.id!, exitCode, nextRun, JobStatus.Idle);
+    finalizeJob(db, job.id!, exitCode, nextRun, JobStatus.Idle);
 
     appendFileSync(
       logPath,
@@ -97,45 +101,11 @@ export async function executeJob(job: Job, isCatchup: boolean = false) {
     );
   } catch (error: any) {
     if (timeoutTimer) clearTimeout(timeoutTimer);
-    handleExecutionError(job, logPath, error, baseTimeForNextRun);
+    handleExecutionError(db, job, logPath, error, baseTimeForNextRun);
   }
 }
 
-/**
- * Calculates the next execution time based on a cron expression.
- * @param cron The cron expression
- * @param baseTime Optional base time. If provided, calculates next run AFTER this time.
- */
-export function calculateNextRun(cron: string, baseTime?: number): number {
-  const options = baseTime ? { currentDate: new Date(baseTime) } : {};
-  return CronExpressionParser.parse(cron, options).next().getTime();
-}
-
-/**
- * Decodes a buffer to string using an intelligent fallback.
- * Checks for valid UTF-8 sequences; if invalid, assumes GBK (common on Windows).
- */
-export function decodeOutput(buffer: Uint8Array): string {
-  if (buffer.length === 0) return "";
-
-  // Try UTF-8 first
-  const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
-  try {
-    return utf8Decoder.decode(buffer);
-  } catch (e) {
-    // Fall back to GBK
-    try {
-      // @ts-expect-error - "gbk" is supported by Bun/Node but might not be in the standard Encoding type
-      return new TextDecoder("gbk").decode(buffer);
-    } catch (e2) {
-      // Last resort fallback
-      return new TextDecoder("utf-8", { fatal: false }).decode(buffer);
-    }
-  }
-}
-
-function updateJobState(id: number, status: JobStatus, lastRun?: number) {
-  const db = getDb();
+function updateJobState(db: Database, id: number, status: JobStatus, lastRun?: number) {
   if (lastRun) {
     db.prepare(
       "UPDATE jobs SET status = ?, last_run_time = ? WHERE id = ?",
@@ -145,24 +115,24 @@ function updateJobState(id: number, status: JobStatus, lastRun?: number) {
   }
 }
 
-function updateJobPid(id: number, pid: number | null) {
-  getDb().prepare("UPDATE jobs SET pid = ? WHERE id = ?").run(pid, id);
+function updateJobPid(db: Database, id: number, pid: number | null) {
+  db.prepare("UPDATE jobs SET pid = ? WHERE id = ?").run(pid, id);
 }
 
 function finalizeJob(
+  db: Database,
   id: number,
   exitCode: number,
   nextRun: number,
   status: JobStatus,
 ) {
-  getDb()
-    .prepare(
-      "UPDATE jobs SET status = ?, last_exit_code = ?, next_run_time = ?, pid = NULL WHERE id = ?",
-    )
-    .run(status, exitCode, nextRun, id);
+  db.prepare(
+    "UPDATE jobs SET status = ?, last_exit_code = ?, next_run_time = ?, pid = NULL WHERE id = ?",
+  ).run(status, exitCode, nextRun, id);
 }
 
 function handleMissingScript(
+  db: Database,
   job: Job,
   logPath: string,
   startTime: number,
@@ -175,11 +145,9 @@ function handleMissingScript(
   );
 
   const nextRun = calculateNextRun(job.cron, baseTime);
-  getDb()
-    .prepare(
-      "UPDATE jobs SET status = ?, last_run_time = ?, next_run_time = ? WHERE id = ?",
-    )
-    .run(JobStatus.MissingScript, startTime, nextRun, job.id!);
+  db.prepare(
+    "UPDATE jobs SET status = ?, last_run_time = ?, next_run_time = ? WHERE id = ?",
+  ).run(JobStatus.MissingScript, startTime, nextRun, job.id!);
 
   console.error(
     `[${new Date().toLocaleString()}] Job failed: ${job.name} - Script missing`,
@@ -187,6 +155,7 @@ function handleMissingScript(
 }
 
 function handleExecutionError(
+  db: Database,
   job: Job,
   logPath: string,
   error: any,
@@ -199,8 +168,7 @@ function handleExecutionError(
   );
 
   const nextRun = calculateNextRun(job.cron, baseTime);
-  getDb()
-    .prepare("UPDATE jobs SET status = ?, next_run_time = ? WHERE id = ?")
+  db.prepare("UPDATE jobs SET status = ?, next_run_time = ? WHERE id = ?")
     .run(JobStatus.Failed, nextRun, job.id!);
 
   console.error(

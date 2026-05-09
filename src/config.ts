@@ -10,7 +10,7 @@ export const HEARTBEAT_THRESHOLD = 65 * 1000; // 65 seconds
 
 const isTest = process.env.NODE_ENV === "test";
 export const DB_PATH = isTest
-  ? join(process.cwd(), "test_jobs.sqlite")
+  ? ":memory:"
   : process.env.PYRUNNER_DB_PATH || join(PYRUNNER_DIR, "jobs.sqlite");
 
 export function ensureEnv() {

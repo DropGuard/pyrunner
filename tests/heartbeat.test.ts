@@ -1,62 +1,73 @@
-import { expect, test, describe, beforeAll, afterAll } from "bun:test";
-import { getDb, isDaemonActive } from "../src/db";
+import { expect, test, describe, beforeEach, spyOn, afterEach } from "bun:test";
+import { createDb } from "../src/db";
 import { tick } from "../src/daemon";
-import { HEARTBEAT_THRESHOLD } from "../src/config";
+import * as executor from "../src/executor";
+import { type Database } from "bun:sqlite";
 
-describe("Heartbeat Mechanism (Scientific)", () => {
-  const db = getDb();
-
-  test("tick() should update daemon_heartbeat", async () => {
-    // 1. Get current heartbeat
-    const before = db
-      .prepare("SELECT updated_at FROM system_stats WHERE key = ?")
-      .get("daemon_heartbeat") as any;
-    
-    // Wait a bit to ensure timestamp changes
-    await new Promise(resolve => setTimeout(resolve, 10));
-
-    // 2. Run tick
-    await tick();
-
-    // 3. Check if updated_at increased
-    const after = db
-      .prepare("SELECT updated_at FROM system_stats WHERE key = ?")
-      .get("daemon_heartbeat") as any;
-    
-    expect(after.updated_at).toBeGreaterThan(before?.updated_at || 0);
+describe("Daemon Tick & Job Triggering (with DI)", () => {
+  let db: Database;
+  
+  beforeEach(() => {
+    db = createDb(":memory:");
   });
 
-  test("isDaemonActive() should follow HEARTBEAT_THRESHOLD", () => {
+  afterEach(() => {
+    db.close();
+  });
+
+  test("tick() should pick up and execute due jobs", async () => {
     const now = Date.now();
+    
+    db.prepare(`
+      INSERT INTO jobs (name, script_path, working_dir, cron, next_run_time, status, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run("due_job", "test.py", ".", "* * * * *", now - 1000, "idle", now);
 
-    // Case 1: Just updated
-    db.prepare("UPDATE system_stats SET updated_at = ? WHERE key = ?").run(
-      now - 1000,
-      "daemon_heartbeat"
-    );
-    expect(isDaemonActive()).toBe(true);
+    const executeSpy = spyOn(executor, "executeJob").mockImplementation(async () => {
+      return Promise.resolve();
+    });
 
-    // Case 2: Exactly at threshold (should be false or true depending on < or <=, we used <)
-    db.prepare("UPDATE system_stats SET updated_at = ? WHERE key = ?").run(
-      now - HEARTBEAT_THRESHOLD,
-      "daemon_heartbeat"
-    );
-    expect(isDaemonActive()).toBe(false);
+    await tick(db);
 
-    // Case 3: Way past threshold
-    db.prepare("UPDATE system_stats SET updated_at = ? WHERE key = ?").run(
-      now - (HEARTBEAT_THRESHOLD + 10000),
-      "daemon_heartbeat"
-    );
-    expect(isDaemonActive()).toBe(false);
+    expect(executeSpy).toHaveBeenCalled();
+    const job = db.query("SELECT * FROM jobs WHERE name = 'due_job'").get() as any;
+    expect(job.status).toBe("running");
+
+    executeSpy.mockRestore();
   });
 
-  test("isDaemonActive() should return false if no heartbeat record exists", () => {
-    db.prepare("DELETE FROM system_stats WHERE key = ?").run("daemon_heartbeat");
-    expect(isDaemonActive()).toBe(false);
+  test("tick() should NOT pick up jobs that are not yet due", async () => {
+    const now = Date.now();
+    
+    db.prepare(`
+      INSERT INTO jobs (name, script_path, working_dir, cron, next_run_time, status, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run("future_job", "test.py", ".", "* * * * *", now + 100000, "idle", now);
 
-    // Restore for other tests if needed
-    db.prepare("INSERT INTO system_stats (key, value, updated_at) VALUES (?, ?, ?)")
-      .run("daemon_heartbeat", "running", Date.now());
+    const executeSpy = spyOn(executor, "executeJob").mockImplementation(async () => {});
+
+    await tick(db);
+
+    expect(executeSpy).not.toHaveBeenCalled();
+    const job = db.query("SELECT * FROM jobs WHERE name = 'future_job'").get() as any;
+    expect(job.status).toBe("idle");
+
+    executeSpy.mockRestore();
+  });
+
+  test("tick() should NOT pick up jobs that are already running", async () => {
+    const now = Date.now();
+    
+    db.prepare(`
+      INSERT INTO jobs (name, script_path, working_dir, cron, next_run_time, status, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run("running_job", "test.py", ".", "* * * * *", now - 1000, "running", now);
+
+    const executeSpy = spyOn(executor, "executeJob").mockImplementation(async () => {});
+
+    await tick(db);
+
+    expect(executeSpy).not.toHaveBeenCalled();
+    executeSpy.mockRestore();
   });
 });

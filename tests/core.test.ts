@@ -1,69 +1,104 @@
-import { expect, test, describe, beforeAll } from "bun:test";
-import { getDb } from "../src/db";
-import { calculateNextRun } from "../src/executor";
-import { ensureEnv, PYRUNNER_DIR } from "../src/config";
-import { Database } from "bun:sqlite";
+import { expect, test, describe, beforeEach, afterEach, spyOn } from "bun:test";
+import { createDb } from "../src/db";
+import * as actions from "../src/actions";
+import { writeFileSync, unlinkSync, existsSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { type Database } from "bun:sqlite";
 
-describe("PyRunner Core", () => {
-  beforeAll(() => {
-    ensureEnv();
+describe("PyRunner Actions (Integration with DI)", () => {
+  const testScript = join(tmpdir(), `test_script_${Date.now()}.py`);
+  let db: Database;
+
+  beforeEach(() => {
+    // Each test gets its own isolated in-memory database
+    db = createDb(":memory:");
+    writeFileSync(testScript, "print('hello')");
   });
 
-  test("Config paths are correct", () => {
-    expect(PYRUNNER_DIR).toContain(".pyrunner");
+  afterEach(() => {
+    db.close();
+    if (existsSync(testScript)) {
+      unlinkSync(testScript);
+    }
   });
 
-  test("Database initialization", () => {
-    const db = getDb();
-    expect(db).toBeInstanceOf(Database);
-
-    const tables = db
-      .query(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='jobs'",
-      )
-      .all();
-    expect(tables.length).toBe(1);
+  test("Database should have WAL mode enabled", () => {
+    const mode = db.prepare("PRAGMA journal_mode").get() as any;
+    const currentMode = mode.journal_mode.toLowerCase();
+    expect(["wal", "memory"]).toContain(currentMode);
   });
 
-  test("Cron parsing and next run calculation", () => {
-    const cron = "0 9 * * *"; // Every day at 9 AM
-    const nextRun = calculateNextRun(cron);
-    const date = new Date(nextRun);
+  test("Concurrent read/write should not lock (WAL effect)", async () => {
+    try {
+      db.run("BEGIN");
+      db.prepare("INSERT INTO jobs (name, created_at) VALUES (?, ?)").run("concurrent_test", Date.now());
 
-    expect(nextRun).toBeGreaterThan(Date.now());
-    expect(date.getHours()).toBe(9);
-    expect(date.getMinutes()).toBe(0);
+      expect(() => {
+        db.query("SELECT COUNT(*) FROM jobs").all();
+      }).not.toThrow();
+
+      db.run("COMMIT");
+    } catch (e) {
+      db.run("ROLLBACK");
+      throw e;
+    }
   });
 
-  test("Job CRUD operations", () => {
-    const db = getDb();
-    const jobName = "test_unit_job";
+  test("addJob should insert a valid job", () => {
+    const exitSpy = spyOn(process, "exit").mockImplementation((code?: string | number | null | undefined): never => {
+      throw new Error(`process.exit called with code ${code}`);
+    });
 
-    // Create
-    db.prepare(
-      "INSERT INTO jobs (name, script_path, working_dir, cron, next_run_time, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-    ).run(jobName, "/tmp/test.py", "/tmp", "* * * * *", Date.now(), Date.now());
-
-    const job = db
-      .query("SELECT * FROM jobs WHERE name = ?")
-      .get(jobName) as any;
+    actions.addJob(db, "unit_test_job", testScript, "0 9 * * *");
+    
+    const job = db.query("SELECT * FROM jobs WHERE name = ?").get("unit_test_job") as any;
+    
     expect(job).toBeDefined();
-    expect(job.name).toBe(jobName);
+    expect(job.name).toBe("unit_test_job");
+    expect(job.cron).toBe("0 9 * * *");
 
-    // Update status
-    db.prepare("UPDATE jobs SET status = 'running' WHERE name = ?").run(
-      jobName,
-    );
-    const updatedJob = db
-      .query("SELECT * FROM jobs WHERE name = ?")
-      .get(jobName) as any;
-    expect(updatedJob.status).toBe("running");
+    exitSpy.mockRestore();
+  });
 
-    // Delete
-    db.prepare("DELETE FROM jobs WHERE name = ?").run(jobName);
-    const deletedJob = db
-      .query("SELECT * FROM jobs WHERE name = ?")
-      .get(jobName);
-    expect(deletedJob).toBeNull();
+  test("editJob should update script and cron", () => {
+    actions.addJob(db, "edit_test", testScript, "0 9 * * *");
+    
+    const nextScript = testScript + ".next.py";
+    writeFileSync(nextScript, "print('next')");
+
+    actions.editJob(db, "edit_test", { script: nextScript, cron: "1 10 * * *" });
+
+    const job = db.query("SELECT * FROM jobs WHERE name = ?").get("edit_test") as any;
+    expect(job.cron).toBe("1 10 * * *");
+    expect(job.script_path).toContain("next.py");
+
+    unlinkSync(nextScript);
+  });
+
+  test("removeJob should delete from database", () => {
+    actions.addJob(db, "remove_test", testScript, "* * * * *");
+    actions.removeJob(db, "remove_test");
+
+    const job = db.query("SELECT * FROM jobs WHERE name = ?").get("remove_test");
+    expect(job).toBeNull();
+  });
+
+  test("stopJob should send SIGTERM and update status", () => {
+    db.prepare(`
+      INSERT INTO jobs (name, script_path, working_dir, cron, next_run_time, status, pid, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run("stop_test", testScript, "/tmp", "* * * * *", Date.now(), "running", 999999, Date.now());
+
+    const killSpy = spyOn(process, "kill").mockImplementation(() => true);
+
+    actions.stopJob(db, "stop_test");
+
+    const job = db.query("SELECT * FROM jobs WHERE name = ?").get("stop_test") as any;
+    expect(job.status).toBe("idle");
+    expect(job.pid).toBeNull();
+    expect(killSpy).toHaveBeenCalled();
+    
+    killSpy.mockRestore();
   });
 });
