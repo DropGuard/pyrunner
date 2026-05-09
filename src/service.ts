@@ -10,21 +10,53 @@ import vbsTemplate from "../templates/pyrunner.vbs" with { type: "text" };
 
 export async function installService() {
   const platform = process.platform;
-  const exePath = resolve(process.execPath);
-  const mainPath = resolve(Bun.main);
   
-  let command = "";
-  if (Bun.main.endsWith(".ts")) {
-    command = `"${exePath}" run "${mainPath}" daemon`;
-  } else {
-    command = `"${exePath}" daemon`;
+  // Try to find a stable global 'pyrunner' command in the system PATH
+  let globalCmd = "";
+  try {
+    const checkCmd = platform === "win32" ? "where.exe pyrunner" : "which -a pyrunner";
+    const { stdout } = await $`${{ raw: checkCmd }}`.quiet();
+    const paths = stdout.toString().trim().split("\n");
+    
+    // Filter out the current directory and any development/temp paths
+    globalCmd = paths.find(p => {
+      const lowP = p.toLowerCase();
+      return !p.includes(process.cwd()) && 
+             !lowP.includes("_npx") && 
+             !lowP.includes("npm-cache") && 
+             !lowP.includes("temp");
+    }) || "";
+  } catch (e) {
+    // Command not found in PATH
   }
+
+  // If we can't find a global command, and the current execution is also not a candidate for global
+  const mainPath = resolve(Bun.main);
+  const isGlobalCandidate = mainPath.includes("node_modules") || 
+                            mainPath.includes("scoop") || 
+                            (platform !== "win32" && (mainPath.includes("/bin/") || mainPath.includes("/usr/local/")));
+
+  let finalCommand = "";
+
+  if (globalCmd) {
+    finalCommand = `"${globalCmd.trim()}" daemon`;
+  } else if (isGlobalCandidate && !Bun.main.endsWith(".ts")) {
+    // If we are running from what looks like a global bin but 'where/which' didn't pick it up
+    finalCommand = platform === "win32" ? `"${mainPath}" daemon` : `pyrunner daemon`;
+  } else {
+    console.error("\x1b[31m[Error] Cannot install background service: Global installation not found.\x1b[0m");
+    console.error("[Tip] Please install pyrunner globally first: \x1b[36mnpm install -g @dropguard/pyrunner\x1b[0m");
+    console.error("[Note] Background services must point to a stable global path, not a source or temporary directory.");
+    throw new Error("Global installation required for service installation.");
+  }
+
+  console.log(`[Info] Installing background service pointing to: ${finalCommand}`);
 
   switch (platform) {
     case "win32": {
       const startupDir = join(process.env.APPDATA!, "Microsoft\\Windows\\Start Menu\\Programs\\Startup");
       const vbsPath = join(startupDir, "pyrunner-daemon.vbs");
-      const vbsContent = vbsTemplate.replace("{{COMMAND}}", command.replace(/"/g, '""'));
+      const vbsContent = vbsTemplate.replace("{{COMMAND}}", finalCommand.replace(/"/g, '""'));
       writeFileSync(vbsPath, vbsContent);
       console.log(`[Windows] Registered auto-start script: ${vbsPath}`);
       
@@ -40,7 +72,7 @@ export async function installService() {
       const systemdDir = join(homedir(), ".config/systemd/user");
       mkdirSync(systemdDir, { recursive: true });
       const servicePath = join(systemdDir, "pyrunner.service");
-      writeFileSync(servicePath, systemdTemplate.replace("{{COMMAND}}", command));
+      writeFileSync(servicePath, systemdTemplate.replace("{{COMMAND}}", finalCommand));
       console.log(`[Linux] Systemd unit created: ${servicePath}`);
 
       await $`systemctl --user daemon-reload`.quiet();
@@ -51,7 +83,6 @@ export async function installService() {
         console.log("[Linux] Systemd service started.");
       } else {
         console.error(`[Linux] Failed to start service: ${stderr.toString().trim()}`);
-        console.log("Tip: Try running 'systemctl --user start pyrunner.service' manually.");
       }
       break;
     }
@@ -60,7 +91,7 @@ export async function installService() {
       mkdirSync(agentsDir, { recursive: true });
       const plistPath = join(agentsDir, "com.pyrunner.daemon.plist");
       
-      const argList = command.match(/"[^"]+"|\S+/g) || [];
+      const argList = finalCommand.match(/"[^"]+"|\S+/g) || [];
       const args = argList.map(arg => {
         const cleanArg = arg.startsWith('"') && arg.endsWith('"') ? arg.slice(1, -1) : arg;
         return `        <string>${cleanArg}</string>`;
@@ -69,7 +100,6 @@ export async function installService() {
       writeFileSync(plistPath, plistTemplate.replace("{{ARGUMENTS}}", args));
       console.log(`[macOS] LaunchAgent created: ${plistPath}`);
 
-      // Unload first to handle re-installs cleanly
       await $`launchctl unload ${plistPath}`.nothrow().quiet();
       const { exitCode, stderr } = await $`launchctl load -w ${plistPath}`.nothrow().quiet();
       
@@ -77,15 +107,11 @@ export async function installService() {
         console.log("[macOS] LaunchAgent loaded and started.");
       } else {
         console.error(`[macOS] Failed to load agent: ${stderr.toString().trim()}`);
-        console.log(`Tip: Try running 'launchctl load -w ${plistPath}' manually.`);
       }
       break;
     }
-    default:
-      console.error(`Auto-start installation is not supported on platform: ${platform}`);
-      return;
   }
-  console.log("Installation complete. The daemon will now manage your tasks.");
+  console.log("Installation complete.");
 }
 
 export async function uninstallService() {

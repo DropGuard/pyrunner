@@ -42,6 +42,14 @@ export function getDb() {
         created_at INTEGER
       )
     `);
+    db.run(`
+      CREATE TABLE IF NOT EXISTS system_stats (
+        key TEXT PRIMARY KEY,
+        value TEXT,
+        updated_at INTEGER
+      )
+    `);
+    db.prepare("INSERT OR IGNORE INTO system_stats (key, value, updated_at) VALUES (?, ?, ?)").run("daemon_heartbeat", "running", Date.now());
   }
   return db;
 }

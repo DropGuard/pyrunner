@@ -7,6 +7,9 @@ async function tick(isInitial: boolean = false) {
     const db = getDb();
     const now = Date.now();
 
+    // Update heartbeat
+    db.prepare("UPDATE system_stats SET updated_at = ? WHERE key = ?").run(now, "daemon_heartbeat");
+
     const dueJobs = db.query("SELECT * FROM jobs WHERE next_run_time <= $now AND status != $running").all({ 
       $now: now,
       $running: JobStatus.Running 

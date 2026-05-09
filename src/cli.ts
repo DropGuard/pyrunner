@@ -67,6 +67,16 @@ program
     const db = getDb();
     const jobs = db.query("SELECT * FROM jobs").all() as Job[];
 
+    // Check daemon heartbeat
+    const heartbeat = db.prepare("SELECT updated_at FROM system_stats WHERE key = ?").get("daemon_heartbeat") as { updated_at: number } | null;
+    const isDaemonActive = heartbeat && (Date.now() - heartbeat.updated_at) < 65000; // 65 seconds threshold (daemon polls every 30s)
+
+    if (isDaemonActive) {
+      console.log(`\x1b[32m● Scheduler is active\x1b[0m\n`);
+    } else {
+      console.log(`\x1b[31m○ Scheduler is offline\x1b[0m (Run 'pyrunner install' to fix or 'pyrunner daemon' to start manually)\n`);
+    }
+
     if (jobs.length === 0) {
       console.log("No tasks found.");
       return;
