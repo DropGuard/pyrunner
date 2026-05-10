@@ -6,6 +6,88 @@ import { DAEMON_LOCK_PATH } from "./config";
 import { isDaemonActive } from "./db";
 import { logger, killProcessTree } from "./utils";
 
+/**
+ * Windows-specific Registry management via FFI to avoid console flashes.
+ * This is used for auto-start registration in 'Run' key.
+ */
+function manageWindowsAutoStart(command?: string) {
+  if (process.platform !== "win32") return;
+
+  const { dlopen, FFIType, ptr } = require("bun:ffi") as typeof import("bun:ffi");
+  let advapi32;
+  try {
+    advapi32 = dlopen("advapi32.dll", {
+      RegOpenKeyExW: {
+        args: [FFIType.pointer, FFIType.pointer, FFIType.u32, FFIType.u32, FFIType.pointer],
+        returns: FFIType.i32,
+      },
+      RegSetValueExW: {
+        args: [FFIType.pointer, FFIType.pointer, FFIType.u32, FFIType.u32, FFIType.pointer, FFIType.u32],
+        returns: FFIType.i32,
+      },
+      RegDeleteValueW: {
+        args: [FFIType.pointer, FFIType.pointer],
+        returns: FFIType.i32,
+      },
+      RegCloseKey: {
+        args: [FFIType.pointer],
+        returns: FFIType.i32,
+      },
+    });
+  } catch (e) {
+    throw new Error(`Failed to load advapi32.dll: ${e instanceof Error ? e.message : String(e)}`);
+  }
+
+  const HKEY_CURRENT_USER = BigInt("0x80000001");
+  const subKey = Buffer.from("Software\\Microsoft\\Windows\\CurrentVersion\\Run\0", "utf16le");
+  const valueName = Buffer.from("PyRunner\0", "utf16le");
+  
+  const phkResult = new BigUint64Array(1);
+  const KEY_SET_VALUE = 0x0002;
+  const ERROR_SUCCESS = 0;
+
+  const openResult = advapi32.symbols.RegOpenKeyExW(
+    HKEY_CURRENT_USER,
+    ptr(subKey),
+    0,
+    KEY_SET_VALUE,
+    ptr(phkResult)
+  );
+
+  if (openResult !== ERROR_SUCCESS) {
+    advapi32.close();
+    throw new Error(`Failed to open Registry key (Error Code: ${openResult}). Check permissions.`);
+  }
+
+  const hKey = phkResult[0];
+
+  try {
+    if (command) {
+      const valueData = Buffer.from(command + "\0", "utf16le");
+      const setRes = advapi32.symbols.RegSetValueExW(
+        hKey,
+        ptr(valueName),
+        0,
+        1, // REG_SZ
+        ptr(valueData),
+        valueData.length
+      );
+      if (setRes !== ERROR_SUCCESS) {
+        throw new Error(`Failed to set Registry value (Error Code: ${setRes}).`);
+      }
+    } else {
+      const delRes = advapi32.symbols.RegDeleteValueW(hKey, ptr(valueName));
+      // 2 = ERROR_FILE_NOT_FOUND, which means it's already gone, we consider this success
+      if (delRes !== ERROR_SUCCESS && delRes !== 2) {
+        throw new Error(`Failed to delete Registry value (Error Code: ${delRes}).`);
+      }
+    }
+  } finally {
+    advapi32.symbols.RegCloseKey(hKey);
+    advapi32.close();
+  }
+}
+
 export async function installService() {
   const platform = process.platform;
   let finalCommand = "";
@@ -34,53 +116,44 @@ export async function installService() {
   switch (platform) {
     case "win32": {
       const hiddenCommand = `${finalCommand} --hidden`;
-      const { exitCode, stderr } = await $`reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "PyRunner" /t REG_SZ /d ${hiddenCommand} /f`.nothrow().quiet();
+      manageWindowsAutoStart(hiddenCommand);
+      logger.success("[Windows] Registered auto-start entry in Registry.");
 
-      if (exitCode === 0) {
-        // Verify registry entry exists
-        const { exitCode: queryExit } = await $`reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "PyRunner"`.nothrow().quiet();
-        if (queryExit !== 0) {
-          logger.error("[Windows] Registered auto-start entry but verification failed.");
-          return;
+      // Spawn daemon detached
+      const args = (hiddenCommand.match(/"[^"]+"|\S+/g) || []).map(a => a.replace(/^"|"$/g, ""));
+      const proc = Bun.spawn(args, {
+        detached: true,
+        stdout: "ignore",
+        stderr: "ignore",
+        windowsHide: true,
+      });
+      proc.unref();
+      
+      // Verify daemon started and stays running
+      let active = false;
+      for (let i = 0; i < 10; i++) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+        if (isDaemonActive()) {
+          active = true;
+          break;
         }
-        logger.success("[Windows] Registered auto-start entry in Registry.");
+      }
 
-        // Spawn daemon detached
-        const args = (hiddenCommand.match(/"[^"]+"|\S+/g) || []).map(a => a.replace(/^"|"$/g, ""));
-        const proc = Bun.spawn(args, {
-          detached: true,
-          stdout: "ignore",
-          stderr: "ignore",
-        });
-        proc.unref();
-        
-        // Verify daemon started and stays running
-        let active = false;
-        for (let i = 0; i < 10; i++) {
-          await new Promise(resolve => setTimeout(resolve, 500));
-          if (isDaemonActive()) {
-            active = true;
-            break;
-          }
-        }
+      // Double check after a short delay to ensure it didn't crash immediately
+      if (active) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        if (!isDaemonActive()) active = false;
+      }
 
-        // Double check after a short delay to ensure it didn't crash immediately
-        if (active) {
-          await new Promise(resolve => setTimeout(resolve, 1000));
-          if (!isDaemonActive()) active = false;
-        }
-
-        if (active) {
-          logger.success("[Windows] Daemon started in background.");
-        } else {
-          logger.error("[Windows] Daemon failed to start in background.");
-          console.error("[Tip] Try running 'pyrunner daemon' manually to see error messages.");
-        }
+      if (active) {
+        logger.success("[Windows] Daemon started in background.");
       } else {
-        logger.error(`[Windows] Failed to register auto-start: ${stderr.toString()}`);
+        logger.error("[Windows] Daemon failed to start in background.");
+        console.error("[Tip] Try running 'pyrunner daemon' manually to see error messages.");
       }
       break;
     }
+
     case "linux": {
       const systemdDir = join(homedir(), ".config/systemd/user");
       mkdirSync(systemdDir, { recursive: true });
@@ -187,16 +260,8 @@ export async function uninstallService() {
 
   switch (platform) {
     case "win32": {
-      const { exitCode } = await $`reg delete "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "PyRunner" /f`.nothrow().quiet();
-      if (exitCode === 0) {
+      if (manageWindowsAutoStart()) {
         logger.success("[Windows] Removed auto-start entry from Registry.");
-      }
-      
-      const startupDir = join(process.env.APPDATA!, "Microsoft\\Windows\\Start Menu\\Programs\\Startup");
-      const vbsPath = join(startupDir, "pyrunner-daemon.vbs");
-      if (existsSync(vbsPath)) {
-        unlinkSync(vbsPath);
-        logger.info("[Windows] Cleaned up legacy VBS script.");
       }
       break;
     }

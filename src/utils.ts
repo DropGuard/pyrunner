@@ -39,17 +39,28 @@ export async function killProcessTree(pid: number) {
  */
 export function setupWindowsEncoding() {
   if (process.platform !== "win32") return;
+  const { dlopen, FFIType } = require("bun:ffi") as typeof import("bun:ffi");
+  let kernel32;
   try {
-    const { dlopen, FFIType } = require("bun:ffi") as typeof import("bun:ffi");
-    const kernel32 = dlopen("kernel32.dll", {
+    kernel32 = dlopen("kernel32.dll", {
       SetConsoleOutputCP: { args: [FFIType.u32], returns: FFIType.i32 },
     });
-    kernel32.symbols.SetConsoleOutputCP(65001);
-    kernel32.close();
-  } catch {
+  } catch (e) {
+    // Fallback for encoding is okay, but let's at least log if it fails catastrophically
     try {
       Bun.spawnSync(["cmd", "/c", "chcp", "65001"], { stdout: "ignore", stderr: "ignore" });
     } catch {}
+    return;
+  }
+  
+  try {
+    const res = kernel32.symbols.SetConsoleOutputCP(65001);
+    if (res === 0) {
+      // 0 means failure in Win32 API for this function
+      Bun.spawnSync(["cmd", "/c", "chcp", "65001"], { stdout: "ignore", stderr: "ignore" });
+    }
+  } finally {
+    kernel32.close();
   }
 }
 
@@ -58,23 +69,34 @@ export function setupWindowsEncoding() {
  */
 export function hideConsole() {
   if (process.platform !== "win32") return;
+  const { dlopen, FFIType } = require("bun:ffi") as typeof import("bun:ffi");
+  let kernel32, user32;
+  
   try {
-    const { dlopen, FFIType } = require("bun:ffi") as typeof import("bun:ffi");
-    const kernel32 = dlopen("kernel32.dll", {
+    kernel32 = dlopen("kernel32.dll", {
       GetConsoleWindow: { args: [], returns: FFIType.pointer },
+      FreeConsole: { args: [], returns: FFIType.i32 },
     });
-    const user32 = dlopen("user32.dll", {
+    user32 = dlopen("user32.dll", {
       ShowWindow: { args: [FFIType.pointer, FFIType.i32], returns: FFIType.i32 },
     });
+  } catch (e) {
+    throw new Error(`Failed to load Windows UI DLLs for hiding console: ${e instanceof Error ? e.message : String(e)}`);
+  }
 
+  try {
     const hwnd = kernel32.symbols.GetConsoleWindow();
     if (hwnd) {
       user32.symbols.ShowWindow(hwnd, 0); // 0 = SW_HIDE
     }
+    kernel32.symbols.FreeConsole();
+  } finally {
     kernel32.close();
     user32.close();
-  } catch {}
+  }
 }
+
+
 
 /**
  * A robust UTF-8 decoder that sanitizes output.

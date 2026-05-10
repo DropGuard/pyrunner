@@ -6,9 +6,15 @@ import pkg from "../package.json" with { type: "json" };
 import { $ } from "bun";
 import { createDb, JobRepository } from "./db";
 import * as actions from "./actions";
-import { setupWindowsEncoding } from "./utils";
+import { setupWindowsEncoding, hideConsole } from "./utils";
+
+// Early hide for Windows background mode to minimize flash
+if (process.argv.includes("--hidden")) {
+  hideConsole();
+}
 
 const program = new Command();
+
 
 // Helper to wrap async/sync actions for error handling
 const wrapAction = (action: (...args: any[]) => any) => async (...args: any[]) => {

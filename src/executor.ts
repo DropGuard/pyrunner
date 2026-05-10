@@ -15,6 +15,7 @@ function runProcess(job: Job) {
     cwd: job.working_dir,
     stdout: "pipe",
     stderr: "pipe",
+    windowsHide: true,
   });
 }
 

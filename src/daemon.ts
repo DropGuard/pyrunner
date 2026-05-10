@@ -38,11 +38,11 @@ export async function tick(repo: JobRepository, isInitial: boolean = false): Pro
 }
 
 export async function runDaemon(options?: { hidden?: boolean }) {
-  try {
-    if (options?.hidden) {
-      hideConsole();
-    }
+  if (options?.hidden) {
+    hideConsole();
+  }
 
+  try {
     ensureEnv();
     
     // Create lockfile
