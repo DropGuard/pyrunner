@@ -1,6 +1,6 @@
 import { resolve, dirname, join } from "node:path";
 import { existsSync } from "node:fs";
-import { isDaemonActive, JobStatus, type JobRepository } from "./db";
+import { isDaemonActive, JobStatus, type JobRepository, type Job } from "./db";
 import { executeJob } from "./executor";
 import { LOGS_DIR, DEFAULT_TIMEOUT, DAEMON_LOCK_PATH } from "./config";
 import { logger, calculateNextRun, killProcessTree, decodeOutput } from "./utils";

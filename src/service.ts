@@ -38,7 +38,7 @@ function manageWindowsAutoStart(command?: string) {
     throw new Error(`Failed to load advapi32.dll: ${e instanceof Error ? e.message : String(e)}`);
   }
 
-  const HKEY_CURRENT_USER = BigInt("0x80000001");
+  const HKEY_CURRENT_USER = 0x80000001;
   const subKey = Buffer.from("Software\\Microsoft\\Windows\\CurrentVersion\\Run\0", "utf16le");
   const valueName = Buffer.from("PyRunner\0", "utf16le");
   
@@ -59,7 +59,7 @@ function manageWindowsAutoStart(command?: string) {
     throw new Error(`Failed to open Registry key (Error Code: ${openResult}). Check permissions.`);
   }
 
-  const hKey = phkResult[0];
+  const hKey = phkResult[0] as any;
 
   try {
     if (command) {
@@ -87,6 +87,7 @@ function manageWindowsAutoStart(command?: string) {
     advapi32.close();
   }
 }
+
 
 export async function installService() {
   const platform = process.platform;
@@ -260,9 +261,8 @@ export async function uninstallService() {
 
   switch (platform) {
     case "win32": {
-      if (manageWindowsAutoStart()) {
-        logger.success("[Windows] Removed auto-start entry from Registry.");
-      }
+      manageWindowsAutoStart();
+      logger.success("[Windows] Removed auto-start entry from Registry.");
       break;
     }
     case "linux": {

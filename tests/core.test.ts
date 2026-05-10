@@ -63,7 +63,7 @@ describe("PyRunner Actions (Integration with Repository)", () => {
     expect(job).toBeNull();
   });
 
-  test("stopJob should use killProcessTree and update status", async () => {
+  test("killTasks should use killProcessTree and update status", async () => {
     // Manually insert a running job
     db.prepare(`
       INSERT INTO jobs (name, script_path, working_dir, cron, next_run_time, status, pid, created_at)
@@ -75,10 +75,11 @@ describe("PyRunner Actions (Integration with Repository)", () => {
     // Since killProcessTree is exported from utils, we might need to mock it if we wanted full unit test,
     // but here we'll just check if the status reverts to idle.
     
-    await actions.stopJob(repo, "stop_test");
+    await actions.killTasks(repo, "stop_test");
 
     const job = repo.getByName("stop_test");
     expect(job?.status).toBe(JobStatus.Idle);
     expect(job?.pid).toBeNull();
   });
+
 });
