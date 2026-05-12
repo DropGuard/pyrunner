@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { Hono } from "hono";
 import type { JobRepository } from "../db/job-repository";
-import { LOGS_DIR } from "../shared/config";
+import { DAEMON_IPC_PATH, LOGS_DIR } from "../shared/config";
 import { JobStatus } from "../shared/types";
 import { calculateNextRun } from "../utils/cron";
 import { killProcessTree } from "../utils/process";
@@ -30,7 +30,7 @@ export function createRoutes(
     return c.json(
       ok({
         pid: process.pid,
-        port: parseInt(process.env.PYRUNNER_PORT || "7890", 10),
+        ipc: DAEMON_IPC_PATH,
         jobCount: jobs.length,
         uptime: process.uptime(),
       }),
@@ -221,8 +221,18 @@ export function createRoutes(
       if (existsSync(logPath)) {
         try {
           const content = readFileSync(logPath, "utf-8");
-          const lines = content.split("\n");
-          logs[job.name] = lines.slice(-10).join("\n");
+          // Extract only the last execution block
+          const blocks = content.split(/--- \[\d{4}\] ---/);
+          if (blocks.length > 1) {
+            // Get the last non-empty block and re-attach the marker for context
+            const lastBlock = blocks[blocks.length - 1];
+            // Find the original marker in the content to keep the full output correct
+            const allMatches = [...content.matchAll(/--- \[\d{4}\] ---/g)];
+            const lastMatch = allMatches[allMatches.length - 1];
+            logs[job.name] = lastMatch[0] + lastBlock;
+          } else {
+            logs[job.name] = content;
+          }
         } catch {
           logs[job.name] = "";
         }

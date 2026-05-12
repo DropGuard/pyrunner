@@ -1,30 +1,31 @@
-import { unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, unlinkSync } from "node:fs";
 import { createDb } from "../db/index";
 import { JobRepository } from "../db/job-repository";
-import { DAEMON_LOCK_PATH, DEFAULT_PORT, ensureEnv, PORT_FILE_PATH } from "../shared/config";
+import { DAEMON_IPC_PATH, ensureEnv } from "../shared/config";
 import { logger } from "../utils/logger";
-import { hideConsole, killProcessTree } from "../utils/process";
+import { killProcessTree } from "../utils/process";
 import { executeJob } from "./executor";
 import { createRoutes } from "./routes";
 import { scheduler } from "./scheduler";
 
-export async function runDaemon(options?: { hidden?: boolean }) {
-  if (options?.hidden) hideConsole();
-
+export async function runDaemon(_options?: { hidden?: boolean }) {
   try {
     ensureEnv();
 
+    // Clean up stale socket file
+    if (existsSync(DAEMON_IPC_PATH)) {
+      try {
+        unlinkSync(DAEMON_IPC_PATH);
+      } catch (e) {
+        logger.warn(`Failed to clean up stale socket file: ${e}`);
+      }
+    }
+
     const db = createDb();
+
     const repo = new JobRepository(db);
 
     await repo.cleanupStaleJobs();
-
-    // Write lockfile for backward compatibility
-    writeFileSync(DAEMON_LOCK_PATH, process.pid.toString());
-
-    // Determine and write port
-    const port = parseInt(process.env.PYRUNNER_PORT || "", 10) || DEFAULT_PORT;
-    writeFileSync(PORT_FILE_PATH, port.toString());
 
     // Initialize scheduler
     scheduler.initialize(repo, executeJob);
@@ -38,11 +39,10 @@ export async function runDaemon(options?: { hidden?: boolean }) {
     // Create Hono app
     const app = createRoutes(repo, scheduler, executeJob);
 
-    // Start HTTP server
+    // Start IPC server (Unix Socket / Named Pipe)
     Bun.serve({
       fetch: app.fetch,
-      port,
-      hostname: "127.0.0.1",
+      unix: DAEMON_IPC_PATH,
     });
 
     const allJobsAfter = await repo.getAll();
@@ -50,7 +50,7 @@ export async function runDaemon(options?: { hidden?: boolean }) {
     console.log("       PyRunner Daemon Started");
     console.log("========================================");
     console.log(`Time: ${new Date().toLocaleString()}`);
-    console.log(`Port: ${port}`);
+    console.log(`IPC:  ${DAEMON_IPC_PATH}`);
     console.log(`Monitoring ${allJobsAfter.length} tasks:`);
     for (const j of allJobsAfter) {
       const nextRun = scheduler.getNextRun(j.name);
@@ -73,12 +73,6 @@ export async function runDaemon(options?: { hidden?: boolean }) {
         if (job.pid !== null) await killProcessTree(job.pid);
       }
 
-      try {
-        unlinkSync(PORT_FILE_PATH);
-      } catch {}
-      try {
-        unlinkSync(DAEMON_LOCK_PATH);
-      } catch {}
       await db.destroy();
       process.exit(0);
     };

@@ -1,4 +1,4 @@
-import { getDaemonUrl } from "../shared/config";
+import { DAEMON_IPC_PATH, getDaemonUrl } from "../shared/config";
 import { ApiError, DaemonOfflineError } from "../shared/errors";
 import type {
   AddJobRequest,
@@ -20,6 +20,7 @@ export class DaemonClient {
     try {
       const res = await fetch(`${this.baseUrl}${path}`, {
         method,
+        unix: DAEMON_IPC_PATH,
         headers: body ? { "Content-Type": "application/json" } : {},
         body: body ? JSON.stringify(body) : undefined,
       });

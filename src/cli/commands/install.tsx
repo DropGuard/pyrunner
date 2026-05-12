@@ -1,86 +1,115 @@
 import { existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { copyFile } from "node:fs/promises";
+import { basename, join } from "node:path";
 import AutoLaunch from "auto-launch";
 import { render, Text } from "ink";
-import { DAEMON_LOCK_PATH } from "../../shared/config";
+import { BIN_DIR, DAEMON_IPC_PATH, ensureEnv, getDaemonUrl } from "../../shared/config";
 import { logger } from "../../utils/logger";
-import { ErrorBox } from "../components/ErrorBox";
+import { getExecutablePath } from "../../utils/process";
 import { SuccessMsg } from "../components/SuccessMsg";
 
-function getExecutablePath(): string {
-  const mainPath = resolve(Bun.main);
-  const exePath = resolve(process.execPath);
+/**
+ * Locates the physical binary to be installed.
+ * 1. If currently running as a standalone binary, return that path.
+ * 2. If running as a script (npx/dev), look for the platform-specific binary relative to the script.
+ */
+function findRealBinary(mainPath: string, execPath: string): string | null {
+  // Strategy 1: Direct path (for compiled binaries)
+  const isStandalone = !execPath.match(/bun(.exe)?$/i) && !execPath.match(/node(.exe)?$/i);
+  if (isStandalone && existsSync(execPath)) return execPath;
 
-  // Compiled binary: pyrunner.exe
-  if (!mainPath.endsWith(".ts") && !mainPath.includes("_npx") && !mainPath.includes("temp")) {
-    if (mainPath.endsWith(".js")) return `"${exePath}" "${mainPath}"`;
-    return `"${mainPath}"`;
+  // Strategy 2: Contextual discovery (for npx/npm script runs)
+  const platform = process.platform === "win32" ? "windows" : process.platform;
+  const arch = process.arch === "arm64" ? "arm64" : "x64";
+  const target = `${platform}-${arch}`;
+  const binName = process.platform === "win32" ? "pyrunner.exe" : "pyrunner";
+  const pkgName = `@dropguard/pyrunner-${target}`;
+
+  const discoveryPaths = [
+    join(mainPath, "..", "..", pkgName, "bin", binName), // npm package structure
+    join(process.cwd(), binName), // local build
+  ];
+
+  for (const p of discoveryPaths) {
+    if (existsSync(p)) return p;
   }
-  return "";
+
+  return null;
 }
 
 export async function installCommand() {
-  try {
-    const command = getExecutablePath();
-    if (!command) {
-      render(
-        <ErrorBox
-          error={
-            new Error(
-              "Cannot install: stable installation not detected. Install globally first: npm install -g @dropguard/pyrunner",
-            )
-          }
-        />,
-      );
-      process.exit(1);
+  ensureEnv();
+
+  const { main, exe } = getExecutablePath();
+  const sourceBinary = findRealBinary(main, exe);
+
+  if (!sourceBinary) {
+    throw new Error(
+      "Could not find a valid pyrunner binary to install. " +
+        "Please ensure you have installed the platform-specific package or run 'bun build' first.",
+    );
+  }
+
+  const binName = basename(sourceBinary);
+  const targetPath = join(BIN_DIR, binName);
+
+  // STEP 1: Gracefully stop existing daemon using the ALREADY INSTALLED binary
+  if (existsSync(targetPath)) {
+    logger.info("Found existing installation, requesting graceful shutdown...");
+    try {
+      // Use the targetPath (the old version) to run its own 'stop' command.
+      // This ensures the correct port/logic is used for that specific version.
+      Bun.spawnSync([targetPath, "stop"], {
+        stdout: "ignore",
+        stderr: "ignore",
+      });
+      // Give the OS a moment to release file handles after process exit
+      await new Promise((resolve) => setTimeout(resolve, 800));
+    } catch (e) {
+      logger.warn("Graceful shutdown via existing binary failed, proceeding with deployment.");
     }
+  }
 
-    logger.info(`Registering auto-start: ${command}`);
+  // STEP 2: Deploy
+  logger.info(`Installing PyRunner to: ${targetPath}`);
+  await copyFile(sourceBinary, targetPath);
 
-    const autoLauncher = new AutoLaunch({
-      name: "PyRunner",
-      isHidden: true,
-    });
+  // STEP 3: Register Service
+  const autoLauncher = new AutoLaunch({
+    name: "PyRunner",
+    path: targetPath,
+    isHidden: true,
+  });
+  await autoLauncher.enable();
 
-    await autoLauncher.enable();
+  // STEP 4: Start New Daemon
+  logger.info("Starting background daemon...");
+  const proc = Bun.spawn([targetPath, "start", "--hidden"], {
+    detached: true,
+    stdout: "ignore",
+    stderr: "ignore",
+    windowsHide: true,
+  });
+  proc.unref();
 
-    // Spawn daemon now
-    const args = (command.match(/"[^"]+"|\S+/g) || []).map((a) => a.replace(/^"|"$/g, ""));
-    const proc = Bun.spawn([...args, "start", "--hidden"], {
-      detached: true,
-      stdout: "ignore",
-      stderr: "ignore",
-      windowsHide: true,
-    });
-    proc.unref();
+  // STEP 5: Verification (Health Check)
+  let active = false;
+  const healthUrl = `${getDaemonUrl()}/api/v1/health`;
 
-    // Wait for daemon to become active
-    let active = false;
-    for (let i = 0; i < 10; i++) {
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      if (existsSync(DAEMON_LOCK_PATH)) {
-        active = true;
-        break;
-      }
+  for (let i = 0; i < 10; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const res = await fetch(healthUrl, { unix: DAEMON_IPC_PATH }).catch(() => null);
+    if (res?.ok) {
+      active = true;
+      break;
     }
+  }
 
-    if (active) {
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-      active = existsSync(DAEMON_LOCK_PATH);
-    }
-
-    if (active) {
-      render(<SuccessMsg message="Background service installed and daemon started." />);
-    } else {
-      render(
-        <Text color="yellow">
-          Service registered but daemon may not have started. Try running &apos;pyrunner start&apos;
-          manually to see error messages.
-        </Text>,
-      );
-    }
-  } catch (err) {
-    render(<ErrorBox error={err} />);
-    process.exit(1);
+  if (active) {
+    render(<SuccessMsg message="Background service installed and daemon started." />);
+  } else {
+    throw new Error(
+      "Daemon failed to start after installation. Please try running 'pyrunner start' manually.",
+    );
   }
 }

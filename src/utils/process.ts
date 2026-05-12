@@ -1,4 +1,14 @@
+import { resolve } from "node:path";
 import treeKill from "tree-kill";
+
+export function getExecutablePath(
+  overrideMain?: string,
+  overrideExec?: string,
+): { main: string; exe: string } {
+  const main = resolve(overrideMain || Bun.main);
+  const exe = resolve(overrideExec || process.execPath);
+  return { main, exe };
+}
 
 export function killProcessTree(pid: number): Promise<void> {
   return new Promise((resolve) => {
@@ -47,26 +57,4 @@ export function setupWindowsEncoding() {
       });
     } catch {}
   }
-}
-
-export function hideConsole() {
-  if (process.platform !== "win32") return;
-  try {
-    const { dlopen, FFIType } = require("bun:ffi") as typeof import("bun:ffi");
-    const kernel32 = dlopen("kernel32.dll", {
-      GetConsoleWindow: { args: [], returns: FFIType.pointer },
-      FreeConsole: { args: [], returns: FFIType.i32 },
-    });
-    const user32 = dlopen("user32.dll", {
-      ShowWindow: { args: [FFIType.pointer, FFIType.i32], returns: FFIType.i32 },
-    });
-    try {
-      const hwnd = kernel32.symbols.GetConsoleWindow();
-      if (hwnd) user32.symbols.ShowWindow(hwnd, 0);
-      kernel32.symbols.FreeConsole();
-    } finally {
-      kernel32.close();
-      user32.close();
-    }
-  } catch {}
 }

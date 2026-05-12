@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { Command } from "commander";
 import pkg from "../../package.json" with { type: "json" };
 import { ensureEnv } from "../shared/config";
-import { hideConsole, setupWindowsEncoding } from "../utils/process";
+import { setupWindowsEncoding } from "../utils/process";
 import { DaemonClient } from "./client";
 import { addCommand } from "./commands/add";
 import { editCommand } from "./commands/edit";
@@ -15,6 +15,7 @@ import { runCommand } from "./commands/run";
 import { startCommand } from "./commands/start";
 import { stopCommand } from "./commands/stop";
 import { uninstallCommand } from "./commands/uninstall";
+import { cliAction } from "./utils/command";
 
 function checkUv() {
   const result = spawnSync("uv", ["--version"], { stdio: "ignore" });
@@ -27,22 +28,20 @@ function checkUv() {
 
 // No arguments → start daemon (for auto-launch / double-click)
 if (process.argv.length <= 2) {
-  hideConsole();
   setupWindowsEncoding();
   ensureEnv();
-  await startCommand({ hidden: true });
+  await cliAction(() => startCommand({ hidden: true }))();
   process.exit(0);
 }
 
-if (process.argv.includes("--hidden")) {
-  hideConsole();
-}
-
 const program = new Command();
+const client = new DaemonClient();
 
 program
   .name("pyrunner")
-  .description("Lightweight Python script scheduler via uv")
+  .description(
+    "Lightweight Python script scheduler via uv. Running without arguments starts the daemon.",
+  )
   .version(pkg.version)
   .hook("preAction", (_thisCommand, actionCommand) => {
     if (["help", "version", "start"].includes(actionCommand.name())) return;
@@ -57,52 +56,54 @@ program
   .argument("<name>", "Name of the task")
   .argument("<script>", "Path to the Python script")
   .argument("[cron]", "Cron expression (default: daily at noon)", "0 12 * * *")
-  .action((name, script, cron) => addCommand(new DaemonClient(), name, script, cron));
+  .action(cliAction((name, script, cron) => addCommand(client, name, script, cron)));
 
 program
   .command("list")
   .alias("ls")
   .description("List all tasks")
-  .action(() => listCommand(new DaemonClient()));
+  .action(cliAction(() => listCommand(client)));
 
 program
   .command("remove")
   .alias("rm")
   .description("Remove a task")
   .argument("<name>", "Name of the task")
-  .action((name) => removeCommand(new DaemonClient(), name));
+  .action(cliAction((name) => removeCommand(client, name)));
 
 program
   .command("start")
   .alias("daemon")
-  .description("Start the scheduler daemon")
-  .option("--hidden", "Hide console window (Windows only)")
-  .action((options) => startCommand(options));
+  .description("Start the scheduler daemon (default)")
+  .option("--hidden", "Run in hidden mode (internal use)")
+  .action(cliAction((options) => startCommand(options)));
 
 program
-  .command("stop")
+  .command("stop", { hidden: true })
   .description("Stop the scheduler daemon")
-  .action(() => stopCommand(new DaemonClient()));
+  .action(cliAction(() => stopCommand(client)));
 
 program
   .command("run")
-  .description("Run a task immediately")
+  .description("Run all tasks or a specific task")
   .argument("[name]", "Name of the task")
-  .action((name) => runCommand(new DaemonClient(), name));
+  .action(cliAction((name) => runCommand(client, name)));
 
 program
   .command("kill")
-  .description("Kill running tasks")
-  .argument("[name]", "Name of the task (omit to kill all)")
-  .action((name) => killCommand(new DaemonClient(), name));
+  .description("Kill all tasks or a specific task")
+  .argument("[name]", "Name of the task")
+  .action(cliAction((name) => killCommand(client, name)));
 
 program
   .command("logs")
   .description("View task output logs")
   .argument("[name]", "Name of the task")
   .option("-n, --lines <count>", "Number of lines to show")
-  .action((name, options) =>
-    logsCommand(new DaemonClient(), name, options.lines ? parseInt(options.lines, 10) : undefined),
+  .action(
+    cliAction((name, options) =>
+      logsCommand(client, name, options.lines ? parseInt(options.lines, 10) : undefined),
+    ),
   );
 
 program
@@ -111,16 +112,17 @@ program
   .argument("<name>", "Name of the task")
   .option("-s, --script <path>", "New script path")
   .option("-c, --cron <expression>", "New cron expression")
-  .action((name, options) => editCommand(new DaemonClient(), name, options));
+  .action(cliAction((name, options) => editCommand(client, name, options)));
 
 program
   .command("install")
   .description("Install pyrunner as a background service")
-  .action(() => installCommand());
+  .action(cliAction(() => installCommand()));
 
 program
   .command("uninstall")
   .description("Uninstall pyrunner background service")
-  .action(() => uninstallCommand());
+  .option("-w, --wipe", "Remove all data (database and logs)")
+  .action(cliAction((options) => uninstallCommand(options)));
 
-program.parse();
+await program.parseAsync();

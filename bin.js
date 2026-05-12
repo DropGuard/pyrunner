@@ -18,15 +18,22 @@ const target = `${platform}-${arch}`;
 const pkgName = `@dropguard/pyrunner-${target}`;
 const binName = process.platform === "win32" ? "pyrunner.exe" : "pyrunner";
 
+const homedir = require("node:os").homedir();
+const installedBinPath = join(homedir, ".pyrunner", "bin", binName);
+
 function findBinary() {
-  // Standard npm resolution
+  // Strategy 1: Prefer the locally installed 'service' version if available
+  // This allows 'pyrunner install' to perform self-upgrades.
+  if (existsSync(installedBinPath)) return installedBinPath;
+
+  // Strategy 2: Standard npm resolution
   try {
     const pkgDir = require.resolve(`${pkgName}/package.json`);
     const binPath = join(dirname(pkgDir), "bin", binName);
     if (existsSync(binPath)) return binPath;
   } catch {}
 
-  // Flat node_modules (pnpm, hoisted)
+  // Strategy 3: Flat node_modules (pnpm, hoisted)
   const flatPath = join(__dirname, "..", pkgName, "bin", binName);
   if (existsSync(flatPath)) return flatPath;
 
