@@ -5,6 +5,19 @@
 
 **PyRunner** is a lightweight, cross-platform Python script scheduler. Schedule, manage, and monitor Python tasks with Cron expressions — one command to install, zero runtime dependencies.
 
+---
+
+## ✨ Features
+
+- **⚡ Lightweight & Fast**: Built with Bun for minimal overhead and maximum performance.
+- **🛠️ Automated Environment**: Leverages `uv` for lightning-fast Python dependency management and script execution.
+- **📅 Cron Scheduling**: Robust task scheduling using standard Cron syntax via `croner`.
+- **🖥️ Service Integration**: Native background service support for Windows (Registry), Linux (systemd), and macOS (launchd).
+- **📊 Real-time Monitoring**: Monitor task status, logs, and execution history through an interactive CLI.
+- **🔒 Industrial Grade**: Atomic status updates, process tree cleanup, and strict UTF-8 encoding enforcement.
+
+---
+
 ## 📦 Installation
 
 ```bash
@@ -17,6 +30,8 @@ npm install -g @dropguard/pyrunner
 | :--- | :--- |
 | [uv](https://docs.astral.sh/uv/getting-started/installation/) | Python package management and script execution |
 | [Python](https://www.python.org/) 3.8+ | Running your scripts |
+
+---
 
 ## 🚀 Quick Start
 
@@ -54,6 +69,8 @@ pyrunner stop
 pyrunner uninstall
 ```
 
+---
+
 ## 🛠️ CLI Reference
 
 | Command | Description |
@@ -70,6 +87,8 @@ pyrunner uninstall
 | `install` | Register as a system service (auto-start on boot). |
 | `uninstall` | Remove the system service. |
 
+---
+
 ## ⚠️ Encoding
 
 PyRunner enforces UTF-8 everywhere:
@@ -77,6 +96,8 @@ PyRunner enforces UTF-8 everywhere:
 - Sets `PYTHONUTF8=1` and `PYTHONIOENCODING=utf-8` for child processes.
 - Invalid bytes are replaced with U+FFFD — never crashes, never corrupts logs.
 - Windows: auto-configures console codepage to 65001.
+
+---
 
 ## 📄 License
 
