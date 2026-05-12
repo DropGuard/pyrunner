@@ -1,5 +1,4 @@
 import { unlinkSync, writeFileSync } from "node:fs";
-import { serve } from "@hono/node-server";
 import { createDb } from "../db/index";
 import { JobRepository } from "../db/job-repository";
 import { DAEMON_LOCK_PATH, DEFAULT_PORT, ensureEnv, PORT_FILE_PATH } from "../shared/config";
@@ -40,7 +39,11 @@ export async function runDaemon(options?: { hidden?: boolean }) {
     const app = createRoutes(repo, scheduler, executeJob);
 
     // Start HTTP server
-    const _server = serve({ fetch: app.fetch, port, hostname: "127.0.0.1" });
+    Bun.serve({
+      fetch: app.fetch,
+      port,
+      hostname: "127.0.0.1",
+    });
 
     const allJobsAfter = await repo.getAll();
     console.log("========================================");
