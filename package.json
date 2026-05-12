@@ -19,29 +19,37 @@
     "cross-platform"
   ],
   "main": "bin.js",
-  "type": "module",
   "bin": {
     "pyrunner": "bin.js"
   },
   "files": [
-    "src",
-    "templates",
     "bin.js"
   ],
   "private": false,
   "scripts": {
     "build": "bun build.ts",
+    "build:all": "bun scripts/build-platform.ts windows-x64 && bun scripts/build-platform.ts linux-x64 && bun scripts/build-platform.ts darwin-arm64 && bun scripts/build-platform.ts darwin-x64",
     "test": "bun test",
+    "format": "biome format --write .",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
     "preuninstall": "pyrunner uninstall"
   },
   "devDependencies": {
-    "@types/bun": "latest"
-  },
-  "peerDependencies": {
-    "typescript": "^5"
-  },
-  "dependencies": {
+    "@biomejs/biome": "^2.4.15",
+    "@types/auto-launch": "^5.0.5",
+    "@types/bun": "latest",
+    "@types/react": "^19.2.14",
+    "@hono/node-server": "^2.0.2",
+    "@inkjs/ui": "^2.0.0",
+    "auto-launch": "^5.0.6",
     "commander": "^14.0.3",
-    "cron-parser": "^5.5.0"
-  }
+    "croner": "^10.0.1",
+    "hono": "^4.12.18",
+    "ink": "^7.0.2",
+    "kysely": "^0.29.0",
+    "react": "^19.2.6",
+    "tree-kill": "^1.2.2"
+  },
+  "optionalDependencies": {}
 }

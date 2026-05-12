@@ -1,6 +1,7 @@
 // build.ts
+
+import { existsSync, unlinkSync } from "node:fs";
 import { $ } from "bun";
-import { unlinkSync, existsSync } from "node:fs";
 
 console.log("🚀 Starting build...");
 
@@ -9,7 +10,7 @@ try {
   if (existsSync("pyrunner.exe")) unlinkSync("pyrunner.exe");
   if (existsSync("cli.exe")) unlinkSync("cli.exe");
 
-  const result = await $`bun build --compile ./src/cli.ts --outfile pyrunner.exe`.quiet();
+  const result = await $`bun build --compile ./src/cli/index.ts --outfile pyrunner.exe`.quiet();
 
   if (result.exitCode === 0) {
     console.log("✅ Build successful: pyrunner.exe");
@@ -18,7 +19,6 @@ try {
     process.exit(1);
   }
 } catch (e) {
-console.error("❌ Build error:", e instanceof Error ? e.message : String(e));
-process.exit(1);
+  console.error("❌ Build error:", e instanceof Error ? e.message : String(e));
+  process.exit(1);
 }
-

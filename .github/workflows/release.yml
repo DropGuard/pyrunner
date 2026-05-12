@@ -1,0 +1,107 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - target: windows-x64
+            os: windows-latest
+          - target: linux-x64
+            os: ubuntu-latest
+          - target: darwin-arm64
+            os: macos-latest
+          - target: darwin-x64
+            os: macos-13
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - run: bun install --frozen-lockfile
+
+      - run: bun scripts/build-platform.ts ${{ matrix.target }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: platform-packages/${{ matrix.target }}/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: platform-packages
+
+      - run: |
+          mkdir -p platform-packages/windows-x64/bin
+          mkdir -p platform-packages/linux-x64/bin
+          mkdir -p platform-packages/darwin-arm64/bin
+          mkdir -p platform-packages/darwin-x64/bin
+
+      - name: Verify artifacts
+        run: |
+          ls -la platform-packages/*/bin/
+
+      - name: Publish platform packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          for target in windows-x64 linux-x64 darwin-arm64 darwin-x64; do
+            echo "Publishing @dropguard/pyrunner-${target}..."
+            cd platform-packages/${target}
+            npm publish --access public || echo "Already published or failed"
+            cd ../..
+          done
+
+      - name: Prepare main package
+        run: bun scripts/prepare-publish.ts
+
+      - name: Publish main package
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish dist-publish/ --access public
+
+  github-release:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: platform-packages
+
+      - name: Rename binaries for release
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          mv platform-packages/windows-x64/bin/pyrunner.exe platform-packages/windows-x64/bin/pyrunner-${VERSION}-windows-x64.exe
+          mv platform-packages/linux-x64/bin/pyrunner platform-packages/linux-x64/bin/pyrunner-${VERSION}-linux-x64
+          mv platform-packages/darwin-arm64/bin/pyrunner platform-packages/darwin-arm64/bin/pyrunner-${VERSION}-darwin-arm64
+          mv platform-packages/darwin-x64/bin/pyrunner platform-packages/darwin-x64/bin/pyrunner-${VERSION}-darwin-x64
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            platform-packages/*/bin/*
+          generate_release_notes: true

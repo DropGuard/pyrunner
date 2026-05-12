@@ -1,9 +1,12 @@
-import { join } from "node:path";
 import { existsSync } from "node:fs";
 import { appendFile, truncate } from "node:fs/promises";
-import { LOGS_DIR, DEFAULT_TIMEOUT } from "./config";
-import { type Job, JobStatus, type JobRepository } from "./db";
-import { calculateNextRun, SmartDecoder, logger, killProcessTree } from "./utils";
+import { join } from "node:path";
+import type { JobRepository } from "../db/job-repository";
+import { DEFAULT_TIMEOUT, LOGS_DIR } from "../shared/config";
+import { type Job, JobStatus } from "../shared/types";
+import { calculateNextRun } from "../utils/cron";
+import { logger } from "../utils/logger";
+import { killProcessTree, SmartDecoder } from "../utils/process";
 
 function runProcess(job: Job) {
   return Bun.spawn(["uv", "run", job.script_path], {
@@ -19,57 +22,57 @@ function runProcess(job: Job) {
   });
 }
 
-/**
- * Main entry point for executing a job.
- * Orchestrates the lifecycle of a job run.
- */
-export async function executeJob(repo: JobRepository, job: Job, isCatchup: boolean = false, options?: { truncateLog?: boolean }) {
+export async function executeJob(
+  repo: JobRepository,
+  job: Job,
+  options?: { truncateLog?: boolean },
+) {
   const logPath = join(LOGS_DIR, `${job.name}.log`);
   const startTime = Date.now();
-  
-  // If manual run happens BEFORE next scheduled time, don't advance the schedule.
-  // Otherwise, advance from the expected next_run_time (or current time if missing).
+
   const isDue = job.next_run_time <= startTime;
   const baseTimeForNextRun = job.next_run_time || startTime;
-  const runType = isCatchup ? "Catch-up" : (isDue ? "Scheduled" : "Manual");
+  const runType = isDue ? "Scheduled" : "Manual";
 
   logger.info(`[${runType}] Starting job: ${job.name}`);
 
-  // 1. Validation
   if (!existsSync(job.script_path)) {
     logger.error(`Script not found for ${job.name}: ${job.script_path}`);
     const nextRun = isDue ? calculateNextRun(job.cron, baseTimeForNextRun) : job.next_run_time;
-    repo.finalize(job.id!, -1, nextRun, JobStatus.MissingScript);
+    await repo.finalize(job.id, -1, nextRun, JobStatus.MissingScript);
     await appendFile(logPath, `\nERROR: Script not found at ${job.script_path}\n`);
     return;
   }
 
-  // 2. Preparation
   if (options?.truncateLog && existsSync(logPath)) {
     await truncate(logPath, 0);
   }
-  await appendFile(
-    logPath,
-    `\n--- RUN STARTED AT ${new Date(startTime).toLocaleString()} ---\n`,
-  );
+  await appendFile(logPath, `\n--- RUN STARTED AT ${new Date(startTime).toLocaleString()} ---\n`);
 
-  let timeoutTimer: Timer | null = null;
+  let timeoutTimer: ReturnType<typeof setTimeout> | null = null;
 
   try {
-    // 3. Execution
     const proc = runProcess(job);
-    repo.updatePid(job.id!, proc.pid);
+    await repo.updatePid(job.id, proc.pid);
 
-    // Setup Timeout
     const timeoutMs = (job.timeout || DEFAULT_TIMEOUT) * 1000;
     timeoutTimer = setTimeout(async () => {
       logger.warn(`Job ${job.name} timed out after ${timeoutMs / 1000}s. Killing tree...`);
       await killProcessTree(proc.pid);
-      await appendFile(logPath, `\nERROR: Job timed out after ${timeoutMs / 1000}s and was killed.\n`);
+      await appendFile(
+        logPath,
+        `\nERROR: Job timed out after ${timeoutMs / 1000}s and was killed.\n`,
+      );
     }, timeoutMs);
 
-    // Streaming stdout/stderr to file
+    // Use a write queue to prevent interleaving of stdout/stderr
     const encoder = new TextEncoder();
+    let writeQueue = Promise.resolve();
+    const writeToLog = (text: string) => {
+      writeQueue = writeQueue.then(() => appendFile(logPath, encoder.encode(text)));
+      return writeQueue;
+    };
+
     const streamToLog = async (stream: ReadableStream) => {
       const reader = stream.getReader();
       const decoder = new SmartDecoder();
@@ -78,18 +81,17 @@ export async function executeJob(repo: JobRepository, job: Job, isCatchup: boole
           const { done, value } = await reader.read();
           if (done) {
             const final = decoder.decode(new Uint8Array(0), true);
-            if (final) await appendFile(logPath, encoder.encode(final));
+            if (final) await writeToLog(final);
             break;
           }
           const text = decoder.decode(value);
-          await appendFile(logPath, encoder.encode(text));
+          await writeToLog(text);
         }
       } finally {
         reader.releaseLock();
       }
     };
 
-    // Run streaming in parallel
     const [exitCode] = await Promise.all([
       proc.exited,
       streamToLog(proc.stdout),
@@ -98,16 +100,14 @@ export async function executeJob(repo: JobRepository, job: Job, isCatchup: boole
 
     if (timeoutTimer) clearTimeout(timeoutTimer);
 
-    // 4. Finalization
-    // Only advance the schedule if it was a due run.
     const nextRun = isDue ? calculateNextRun(job.cron, baseTimeForNextRun) : job.next_run_time;
-    repo.finalize(job.id!, exitCode, nextRun, JobStatus.Idle);
-    
+    await repo.finalize(job.id, exitCode, nextRun, JobStatus.Idle);
+
     await appendFile(
       logPath,
       `--- RUN FINISHED AT ${new Date().toLocaleString()} WITH EXIT CODE ${exitCode} ---\n`,
     );
-    
+
     if (exitCode === 0) {
       logger.success(`Job ${job.name} completed successfully.`);
     } else {
@@ -117,6 +117,6 @@ export async function executeJob(repo: JobRepository, job: Job, isCatchup: boole
     if (timeoutTimer) clearTimeout(timeoutTimer);
     logger.error(`Unexpected error executing job ${job.name}:`, error);
     const nextRun = isDue ? calculateNextRun(job.cron, baseTimeForNextRun) : job.next_run_time;
-    repo.finalize(job.id!, -1, nextRun, JobStatus.Failed);
+    await repo.finalize(job.id, -1, nextRun, JobStatus.Failed);
   }
 }
