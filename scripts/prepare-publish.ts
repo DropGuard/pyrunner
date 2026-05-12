@@ -23,6 +23,8 @@ const outDir = join(rootDir, "dist-publish");
 mkdirSync(outDir, { recursive: true });
 writeFileSync(join(outDir, "package.json"), `${JSON.stringify(pkg, null, 2)}\n`);
 cpSync(join(rootDir, "bin.js"), join(outDir, "bin.js"));
+cpSync(join(rootDir, "README.md"), join(outDir, "README.md"));
+cpSync(join(rootDir, "LICENSE"), join(outDir, "LICENSE"));
 
 console.log(`Prepared dist-publish/package.json v${pkg.version}`);
 console.log("optionalDependencies:", pkg.optionalDependencies);
