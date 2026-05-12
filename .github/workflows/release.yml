@@ -67,6 +67,7 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
+          npm config set //registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}
           for target in windows-x64 linux-x64 darwin-arm64; do
             echo "Publishing @dropguard/pyrunner-${target}..."
             cd platform-packages/${target}
@@ -80,7 +81,9 @@ jobs:
       - name: Publish main package
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish dist-publish/ --access public
+        run: |
+          npm config set //registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}
+          npm publish dist-publish/ --access public
 
   github-release:
     needs: build
