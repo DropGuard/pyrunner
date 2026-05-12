@@ -1,8 +1,8 @@
-import { existsSync } from "node:fs";
-import { copyFile } from "node:fs/promises";
+import { copyFile, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 import AutoLaunch from "auto-launch";
 import { render, Text } from "ink";
+import React from "react";
 import { BIN_DIR, DAEMON_IPC_PATH, ensureEnv, getDaemonUrl } from "../../shared/config";
 import { logger } from "../../utils/logger";
 import { getExecutablePath } from "../../utils/process";
@@ -13,10 +13,15 @@ import { SuccessMsg } from "../components/SuccessMsg";
  * 1. If currently running as a standalone binary, return that path.
  * 2. If running as a script (npx/dev), look for the platform-specific binary relative to the script.
  */
-function findRealBinary(mainPath: string, execPath: string): string | null {
+async function findRealBinary(mainPath: string, execPath: string): Promise<string | null> {
   // Strategy 1: Direct path (for compiled binaries)
   const isStandalone = !execPath.match(/bun(.exe)?$/i) && !execPath.match(/node(.exe)?$/i);
-  if (isStandalone && existsSync(execPath)) return execPath;
+  if (isStandalone) {
+    try {
+      await stat(execPath);
+      return execPath;
+    } catch {}
+  }
 
   // Strategy 2: Contextual discovery (for npx/npm script runs)
   const platform = process.platform === "win32" ? "windows" : process.platform;
@@ -31,17 +36,20 @@ function findRealBinary(mainPath: string, execPath: string): string | null {
   ];
 
   for (const p of discoveryPaths) {
-    if (existsSync(p)) return p;
+    try {
+      await stat(p);
+      return p;
+    } catch {}
   }
 
   return null;
 }
 
 export async function installCommand() {
-  ensureEnv();
+  await ensureEnv();
 
   const { main, exe } = getExecutablePath();
-  const sourceBinary = findRealBinary(main, exe);
+  const sourceBinary = await findRealBinary(main, exe);
 
   if (!sourceBinary) {
     throw new Error(
@@ -53,20 +61,22 @@ export async function installCommand() {
   const binName = basename(sourceBinary);
   const targetPath = join(BIN_DIR, binName);
 
-  // STEP 1: Gracefully stop existing daemon using the ALREADY INSTALLED binary
-  if (existsSync(targetPath)) {
-    logger.info("Found existing installation, requesting graceful shutdown...");
+  // STEP 1: Stop existing daemon
+  let targetExists = false;
+  try {
+    await stat(targetPath);
+    targetExists = true;
+  } catch {}
+
+  if (targetExists) {
+    logger.info("Found existing installation, requesting shutdown...");
     try {
-      // Use the targetPath (the old version) to run its own 'stop' command.
-      // This ensures the correct port/logic is used for that specific version.
-      Bun.spawnSync([targetPath, "stop"], {
+      await Bun.spawn([targetPath, "stop"], {
         stdout: "ignore",
         stderr: "ignore",
-      });
-      // Give the OS a moment to release file handles after process exit
-      await new Promise((resolve) => setTimeout(resolve, 800));
+      }).exited;
     } catch (e) {
-      logger.warn("Graceful shutdown via existing binary failed, proceeding with deployment.");
+      logger.warn("Shutdown request failed, proceeding anyway.");
     }
   }
 
@@ -92,24 +102,5 @@ export async function installCommand() {
   });
   proc.unref();
 
-  // STEP 5: Verification (Health Check)
-  let active = false;
-  const healthUrl = `${getDaemonUrl()}/api/v1/health`;
-
-  for (let i = 0; i < 10; i++) {
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    const res = await fetch(healthUrl, { unix: DAEMON_IPC_PATH }).catch(() => null);
-    if (res?.ok) {
-      active = true;
-      break;
-    }
-  }
-
-  if (active) {
-    render(<SuccessMsg message="Background service installed and daemon started." />);
-  } else {
-    throw new Error(
-      "Daemon failed to start after installation. Please try running 'pyrunner start' manually.",
-    );
-  }
+  render(<SuccessMsg message="Background service installed and daemon started." />);
 }

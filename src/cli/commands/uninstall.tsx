@@ -9,13 +9,10 @@ import { SuccessMsg } from "../components/SuccessMsg";
 export async function uninstallCommand(options: { wipe?: boolean } = {}) {
   // 1. Stop daemon via API if running
   const shutdownUrl = `${getDaemonUrl()}/api/v1/daemon/shutdown`;
-  const res = await fetch(shutdownUrl, {
+  await fetch(shutdownUrl, {
     method: "POST",
     unix: DAEMON_IPC_PATH,
   }).catch(() => null);
-  if (res?.ok) {
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-  }
 
   // 2. Disable AutoLaunch
   const { exe } = getExecutablePath();

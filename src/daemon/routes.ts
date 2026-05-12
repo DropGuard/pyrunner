@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { readFile, stat } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { Hono } from "hono";
 import type { JobRepository } from "../db/job-repository";
@@ -196,18 +196,14 @@ export function createRoutes(
     const lines = parseInt(c.req.query("lines") || "0", 10) || 0;
     const logPath = join(LOGS_DIR, `${name}.log`);
 
-    if (!existsSync(logPath)) {
-      return c.json(ok({ content: "" }));
-    }
-
     try {
-      const content = readFileSync(logPath, "utf-8");
+      const content = await readFile(logPath, "utf-8");
       if (lines > 0) {
         const allLines = content.split("\n");
         return c.json(ok({ content: allLines.slice(-lines).join("\n") }));
       }
       return c.json(ok({ content }));
-    } catch {
+    } catch (e: any) {
       return c.json(ok({ content: "" }));
     }
   });
@@ -218,24 +214,22 @@ export function createRoutes(
     const logs: Record<string, string> = {};
     for (const job of jobs) {
       const logPath = join(LOGS_DIR, `${job.name}.log`);
-      if (existsSync(logPath)) {
-        try {
-          const content = readFileSync(logPath, "utf-8");
-          // Extract only the last execution block
-          const blocks = content.split(/--- \[\d{4}\] ---/);
-          if (blocks.length > 1) {
-            // Get the last non-empty block and re-attach the marker for context
-            const lastBlock = blocks[blocks.length - 1];
-            // Find the original marker in the content to keep the full output correct
-            const allMatches = [...content.matchAll(/--- \[\d{4}\] ---/g)];
-            const lastMatch = allMatches[allMatches.length - 1];
-            logs[job.name] = lastMatch[0] + lastBlock;
-          } else {
-            logs[job.name] = content;
-          }
-        } catch {
-          logs[job.name] = "";
+      try {
+        const content = await readFile(logPath, "utf-8");
+        // Extract only the last execution block
+        const blocks = content.split(/--- \[\d{4}\] ---/);
+        if (blocks.length > 1) {
+          // Get the last non-empty block and re-attach the marker for context
+          const lastBlock = blocks[blocks.length - 1];
+          // Find the original marker in the content to keep the full output correct
+          const allMatches = [...content.matchAll(/--- \[\d{4}\] ---/g)];
+          const lastMatch = allMatches[allMatches.length - 1];
+          logs[job.name] = lastMatch[0] + lastBlock;
+        } else {
+          logs[job.name] = content;
         }
+      } catch {
+        logs[job.name] = "";
       }
     }
     return c.json(ok(logs));
@@ -243,7 +237,7 @@ export function createRoutes(
 
   // Shutdown
   app.post("/api/v1/daemon/shutdown", (c) => {
-    setTimeout(() => process.emit("SIGTERM"), 100);
+    process.nextTick(() => process.emit("SIGTERM"));
     return c.json(ok({ shutting_down: true }));
   });
 

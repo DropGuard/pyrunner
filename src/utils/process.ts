@@ -10,13 +10,17 @@ export function getExecutablePath(
   return { main, exe };
 }
 
-export function killProcessTree(pid: number): Promise<void> {
+export function killProcessTree(pid: number, force = false): Promise<void> {
   return new Promise((resolve) => {
+    if (force) {
+      treeKill(pid, "SIGKILL", () => resolve());
+      return;
+    }
     treeKill(pid, "SIGTERM", (err) => {
       if (err) {
         setTimeout(() => {
           treeKill(pid, "SIGKILL", () => resolve());
-        }, 2000);
+        }, 500);
       } else {
         resolve();
       }
@@ -37,7 +41,7 @@ export function decodeOutput(buffer: Uint8Array): string {
   return new SmartDecoder().decode(buffer, true);
 }
 
-export function setupWindowsEncoding() {
+export async function setupWindowsEncoding() {
   if (process.platform !== "win32") return;
   try {
     const { dlopen, FFIType } = require("bun:ffi") as typeof import("bun:ffi");
@@ -51,10 +55,11 @@ export function setupWindowsEncoding() {
     }
   } catch {
     try {
-      Bun.spawnSync(["cmd", "/c", "chcp", "65001"], {
+      const proc = Bun.spawn(["cmd", "/c", "chcp", "65001"], {
         stdout: "ignore",
         stderr: "ignore",
       });
+      await proc.exited;
     } catch {}
   }
 }

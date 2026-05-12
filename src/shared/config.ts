@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -14,10 +14,10 @@ export const DB_PATH =
   process.env.PYRUNNER_DB_PATH ||
   (process.env.NODE_ENV === "test" ? ":memory:" : join(PYRUNNER_DIR, "jobs.sqlite"));
 
-export function ensureEnv() {
-  mkdirSync(PYRUNNER_DIR, { recursive: true });
-  mkdirSync(BIN_DIR, { recursive: true });
-  mkdirSync(LOGS_DIR, { recursive: true });
+export async function ensureEnv() {
+  await mkdir(PYRUNNER_DIR, { recursive: true });
+  await mkdir(BIN_DIR, { recursive: true });
+  await mkdir(LOGS_DIR, { recursive: true });
 }
 
 export function getDaemonUrl(): string {

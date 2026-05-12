@@ -17,10 +17,15 @@ import { stopCommand } from "./commands/stop";
 import { uninstallCommand } from "./commands/uninstall";
 import { cliAction } from "./utils/command";
 
-function checkUv() {
-  const result = spawnSync("uv", ["--version"], { stdio: "ignore" });
-  if (result.status !== 0) {
-    console.error("\x1b[31m[Error] 'uv' not found.\x1b[0m");
+async function checkUv() {
+  try {
+    const proc = Bun.spawn(["uv", "--version"], { stdout: "ignore", stderr: "ignore" });
+    await proc.exited;
+    if (proc.exitCode !== 0) {
+      throw new Error("uv returned non-zero exit code");
+    }
+  } catch (e) {
+    console.error("\x1b[31m[Error] 'uv' not found or failed to run.\x1b[0m");
     console.error("[Tip] Install uv: https://docs.astral.sh/uv/getting-started/installation/\n");
     process.exit(1);
   }
@@ -28,8 +33,8 @@ function checkUv() {
 
 // No arguments → start daemon (for auto-launch / double-click)
 if (process.argv.length <= 2) {
-  setupWindowsEncoding();
-  ensureEnv();
+  await setupWindowsEncoding();
+  await ensureEnv();
   await cliAction(() => startCommand({ hidden: true }))();
   process.exit(0);
 }
@@ -43,11 +48,11 @@ program
     "Lightweight Python script scheduler via uv. Running without arguments starts the daemon.",
   )
   .version(pkg.version)
-  .hook("preAction", (_thisCommand, actionCommand) => {
+  .hook("preAction", async (_thisCommand, actionCommand) => {
     if (["help", "version", "start"].includes(actionCommand.name())) return;
-    ensureEnv();
-    setupWindowsEncoding();
-    if (["add", "run"].includes(actionCommand.name())) checkUv();
+    await ensureEnv();
+    await setupWindowsEncoding();
+    if (["add", "run"].includes(actionCommand.name())) await checkUv();
   });
 
 program

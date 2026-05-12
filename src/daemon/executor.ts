@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { stat } from "node:fs/promises";
 import { appendFile, truncate } from "node:fs/promises";
 import { join } from "node:path";
 import type { JobRepository } from "../db/job-repository";
@@ -36,7 +36,9 @@ export async function executeJob(
 
   logger.info(`[${runType}] Starting job: ${job.name}`);
 
-  if (!existsSync(job.script_path)) {
+  try {
+    await stat(job.script_path);
+  } catch (e: any) {
     logger.error(`Script not found for ${job.name}: ${job.script_path}`);
     const nextRun = isDue ? calculateNextRun(job.cron, baseTimeForNextRun) : job.next_run_time;
     await repo.finalize(job.id, -1, nextRun, JobStatus.MissingScript);
@@ -44,8 +46,12 @@ export async function executeJob(
     return;
   }
 
-  if (options?.truncateLog && existsSync(logPath)) {
-    await truncate(logPath, 0);
+  if (options?.truncateLog) {
+    try {
+      await truncate(logPath, 0);
+    } catch (e: any) {
+      // Ignore if log file doesn't exist yet
+    }
   }
   await appendFile(logPath, `\n--- RUN STARTED AT ${new Date(startTime).toLocaleString()} ---\n`);
 
@@ -116,7 +122,13 @@ export async function executeJob(
   } catch (error) {
     if (timeoutTimer) clearTimeout(timeoutTimer);
     logger.error(`Unexpected error executing job ${job.name}:`, error);
+    
     const nextRun = isDue ? calculateNextRun(job.cron, baseTimeForNextRun) : job.next_run_time;
     await repo.finalize(job.id, -1, nextRun, JobStatus.Failed);
+    
+    await appendFile(
+      logPath,
+      `\nERROR: Unexpected error during execution: ${error instanceof Error ? error.message : String(error)}\n`,
+    );
   }
 }
