@@ -12,7 +12,7 @@ import { join } from "node:path";
 const rootDir = join(import.meta.dir, "..");
 const pkg = JSON.parse(readFileSync(join(rootDir, "package.json"), "utf-8"));
 
-const targets = ["windows-x64", "linux-x64", "darwin-arm64", "darwin-x64"];
+const targets = ["windows-x64", "linux-x64", "darwin-arm64"];
 
 pkg.optionalDependencies = {};
 for (const t of targets) {

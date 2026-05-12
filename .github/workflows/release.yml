@@ -19,8 +19,6 @@ jobs:
             os: ubuntu-latest
           - target: darwin-arm64
             os: macos-latest
-          - target: darwin-x64
-            os: macos-13
 
     runs-on: ${{ matrix.os }}
     env:
@@ -69,7 +67,7 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          for target in windows-x64 linux-x64 darwin-arm64 darwin-x64; do
+          for target in windows-x64 linux-x64 darwin-arm64; do
             echo "Publishing @dropguard/pyrunner-${target}..."
             cd platform-packages/${target}
             npm publish --access public || echo "Already published or failed"
@@ -103,7 +101,6 @@ jobs:
           mv platform-packages/windows-x64/bin/pyrunner.exe platform-packages/windows-x64/bin/pyrunner-${VERSION}-windows-x64.exe
           mv platform-packages/linux-x64/bin/pyrunner platform-packages/linux-x64/bin/pyrunner-${VERSION}-linux-x64
           mv platform-packages/darwin-arm64/bin/pyrunner platform-packages/darwin-arm64/bin/pyrunner-${VERSION}-darwin-arm64
-          mv platform-packages/darwin-x64/bin/pyrunner platform-packages/darwin-x64/bin/pyrunner-${VERSION}-darwin-x64
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
