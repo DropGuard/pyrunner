@@ -52,6 +52,10 @@ async function preparePublish() {
     ...pkg,
     dependencies: undefined,
     devDependencies: undefined,
+    scripts: {
+      postinstall: "node bin.js install",
+      preuninstall: "node bin.js uninstall",
+    },
     optionalDependencies: Object.fromEntries(
       ALL_TARGETS.map((t) => [`@dropguard/pyrunner-${t}`, pkg.version]),
     ),
