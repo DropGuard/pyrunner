@@ -72,7 +72,7 @@ jobs:
             echo "Publishing @dropguard/pyrunner-${target}..."
             cd dist/platforms/${target}
             npm publish --access public || echo "Already published or failed"
-            cd ../..
+            cd ../../..
           done
 
       - name: Prepare main package
