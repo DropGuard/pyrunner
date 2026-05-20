@@ -34,7 +34,6 @@ jobs:
         run: go vet ./...
 
   release:
-    needs: test
     if: startsWith(github.ref, 'refs/tags/v')
     strategy:
       matrix:
