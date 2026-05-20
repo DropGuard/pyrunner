@@ -19,6 +19,7 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: 'go.mod'
+          cache: true
 
       - name: Install uv
         uses: astral-sh/setup-uv@v8.1.0
@@ -26,13 +27,13 @@ jobs:
           enable-cache: false
 
       - name: Build
-        run: go build ./cmd/...
+        run: make build
 
       - name: Test
-        run: go test ./internal/... -v -count=1
+        run: make test
 
       - name: Vet
-        run: go vet ./...
+        run: make vet
 
   release:
     needs: test
@@ -58,18 +59,19 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: 'go.mod'
+          cache: true
 
       - name: Build CLI
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
-        run: go build -o pyrunner${{ matrix.goos == 'windows' && '.exe' || '' }} ./cmd/pyrunner/
+        run: make build-cli BINDIR=.
 
       - name: Build Daemon
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
-        run: go build -o pyrunnerd${{ matrix.goos == 'windows' && '.exe' || '' }} ./cmd/pyrunnerd/
+        run: make build-daemon BINDIR=.
 
       - name: Package
         shell: bash
