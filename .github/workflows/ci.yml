@@ -58,10 +58,16 @@ jobs:
           go-version: '1.23'
 
       - name: Build CLI
-        run: GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -o pyrunner${{ matrix.goos == 'windows' && '.exe' || '' }} ./cmd/pyrunner/
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: go build -o pyrunner${{ matrix.goos == 'windows' && '.exe' || '' }} ./cmd/pyrunner/
 
       - name: Build Daemon
-        run: GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -o pyrunnerd${{ matrix.goos == 'windows' && '.exe' || '' }} ./cmd/pyrunnerd/
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: go build -o pyrunnerd${{ matrix.goos == 'windows' && '.exe' || '' }} ./cmd/pyrunnerd/
 
       - name: Package
         shell: bash
