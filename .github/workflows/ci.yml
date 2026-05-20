@@ -9,7 +9,6 @@ on:
 
 jobs:
   test:
-    if: "!startsWith(github.ref, 'refs/tags/')"
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
@@ -34,6 +33,7 @@ jobs:
         run: go vet ./...
 
   release:
+    needs: test
     if: startsWith(github.ref, 'refs/tags/v')
     strategy:
       matrix:
