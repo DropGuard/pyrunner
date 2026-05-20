@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Build
+        run: go build ./cmd/...
+
+      - name: Test
+        run: go test ./internal/... -v -count=1
+
+      - name: Vet
+        run: go vet ./...
+
+  release:
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v')
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+          - os: windows-latest
+            goos: windows
+            goarch: amd64
+          - os: macos-latest
+            goos: darwin
+            goarch: arm64
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Build CLI
+        run: GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -o pyrunner${{ matrix.goos == 'windows' && '.exe' || '' }} ./cmd/pyrunner/
+
+      - name: Build Daemon
+        run: GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -o pyrunnerd${{ matrix.goos == 'windows' && '.exe' || '' }} ./cmd/pyrunnerd/
+
+      - name: Package
+        shell: bash
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          ARCHIVE="pyrunner-${TAG}-${{ matrix.goos }}-${{ matrix.goarch }}"
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            7z a "${ARCHIVE}.zip" pyrunner.exe pyrunnerd.exe
+          else
+            tar czf "${ARCHIVE}.tar.gz" pyrunner pyrunnerd
+          fi
+
+      - name: Upload Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            *.tar.gz
+            *.zip

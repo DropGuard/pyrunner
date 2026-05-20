@@ -1,0 +1,12 @@
+{
+  "name": "@dropguard/pyrunner",
+  "version": "0.2.0",
+  "description": "A lightweight, cross-platform Python script scheduler",
+  "bin": {
+    "pyrunner": "./bin.js"
+  },
+  "keywords": ["python", "scheduler", "cron", "daemon"],
+  "license": "MIT",
+  "os": ["linux", "darwin", "win32"],
+  "cpu": ["x64", "arm64"]
+}

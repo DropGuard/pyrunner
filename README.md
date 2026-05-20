@@ -1,4 +1,4 @@
-# @dropguard/pyrunner 🚀
+# @dropguard/pyrunner
 
 [![npm version](https://img.shields.io/npm/v/@dropguard/pyrunner.svg?style=flat-square)](https://www.npmjs.com/package/@dropguard/pyrunner)
 [![license](https://img.shields.io/npm/l/@dropguard/pyrunner.svg?style=flat-square)](https://github.com/DropGuard/pyrunner/blob/main/LICENSE)
@@ -7,81 +7,69 @@
 
 ---
 
-## ✨ Features
+## Features
 
-- **⚡ Lightweight & Fast**: Built with Bun for minimal overhead and maximum performance.
-- **🛠️ Automated Environment**: Leverages `uv` for lightning-fast Python dependency management and script execution.
-- **📅 Cron Scheduling**: Robust task scheduling using standard Cron syntax via `croner`.
-- **🖥️ Service Integration**: Native background service support for Windows (Registry), Linux (systemd), and macOS (launchd).
-- **📊 Real-time Monitoring**: Monitor task status, logs, and execution history through an interactive CLI.
-- **🔒 Industrial Grade**: Atomic status updates, process tree cleanup, and strict UTF-8 encoding enforcement.
+- **Lightweight**: Go-compiled static binary, no runtime dependencies.
+- **Automated Environment**: Uses `uv` for Python dependency management and script execution.
+- **Cron Scheduling**: Standard 5-field Cron expressions via `robfig/cron`.
+- **Service Integration**: Auto-start on boot — Windows (Registry), Linux (XDG autostart), macOS (launchd).
+- **Process Management**: Graceful kill (SIGTERM → SIGKILL), process tree cleanup, 10-minute timeout.
+- **Strict UTF-8**: Enforces `PYTHONUTF8=1` and `PYTHONIOENCODING=utf-8` on child processes.
 
 ---
 
-## 📦 Installation
+## Installation
 
-Choose one of the following installation methods:
+### One-liner Script (Recommended)
 
-### Method 1: One-liner Script (Recommended 🌟)
+No Go, Node.js, or Python runtime required. Downloads the native binary for your platform.
 
-No Node.js, NPM, or Bun runtime required. Automatically downloads the native binary for your platform, adds it to your user PATH, and installs the background daemon.
-
-#### Windows (PowerShell)
+**Windows (PowerShell)**
 ```powershell
 iwr -useb https://raw.githubusercontent.com/DropGuard/pyrunner/main/scripts/install.ps1 | iex
 ```
 
-#### macOS / Linux (Bash)
+**macOS / Linux (Bash)**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/DropGuard/pyrunner/main/scripts/install.sh | bash
 ```
 
----
-
-### Method 2: Via NPM (Global Package)
-
-Use this if you already have Node.js / NPM installed in your local environment:
+### Via NPM
 
 ```bash
 npm install -g @dropguard/pyrunner
+```
+
+### From Source
+
+```bash
+git clone https://github.com/DropGuard/pyrunner.git
+cd pyrunner
+make install
 ```
 
 ### Requirements
 
 | Dependency | Why |
 | :--- | :--- |
-| [uv](https://docs.astral.sh/uv/getting-started/installation/) | Python package management and script execution |
+| [uv](https://docs.astral.sh/uv/) | Python package management and script execution |
 | [Python](https://www.python.org/) 3.8+ | Running your scripts |
 
 ---
 
-## 🚀 Quick Start
-
-### 1. Add a Task
-
-Schedule a Python script to run every day at 9:00 AM:
+## Quick Start
 
 ```bash
+# Schedule a Python script to run daily at 9:00 AM
 pyrunner add my-task ./scripts/daily_report.py "0 9 * * *"
-```
 
-### 2. List Tasks
-
-```bash
+# List all tasks
 pyrunner list
-```
 
-### 3. Run Immediately
-
-```bash
+# Run immediately
 pyrunner run my-task
-```
 
-### 4. Install as a Background Service
-
-Run PyRunner automatically on system boot:
-
-```bash
+# Install as a background service (auto-start on boot)
 pyrunner install
 
 # Stop the daemon
@@ -93,7 +81,7 @@ pyrunner uninstall
 
 ---
 
-## 🛠️ CLI Reference
+## CLI Reference
 
 | Command | Description |
 | :--- | :--- |
@@ -101,26 +89,27 @@ pyrunner uninstall
 | `list` / `ls` | List all tasks with status and next run time. |
 | `edit <name> -s <script> -c <cron>` | Update a task's script or cron expression. |
 | `remove <name>` / `rm` | Delete a task. |
-| `run [name]` | Run a task immediately (omit name to run all). |
-| `kill [name]` | Kill a running task (omit name to kill all). |
-| `logs [name] -n <lines>` | View task output logs. |
-| `start` / `daemon` | Start the scheduler daemon manually. |
+| `run [name]` | Run a task immediately (all idle tasks if no name). |
+| `kill [name]` | Kill a running task (all running tasks if no name). |
+| `logs [name] -n <lines>` | View task logs (last execution if no name). |
+| `start` / `daemon` | Start the scheduler daemon. |
 | `stop` | Stop the daemon. |
-| `install` | Register as a system service (auto-start on boot). |
+| `install` | Register as a system service. |
 | `uninstall` | Remove the system service. |
 
 ---
 
-## ⚠️ Encoding
+## Architecture
 
-PyRunner enforces UTF-8 everywhere:
+PyRunner uses a dual-binary architecture:
 
-- Sets `PYTHONUTF8=1` and `PYTHONIOENCODING=utf-8` for child processes.
-- Invalid bytes are replaced with U+FFFD — never crashes, never corrupts logs.
-- Windows: auto-configures console codepage to 65001.
+- **`pyrunner`** — CLI binary for user interaction.
+- **`pyrunnerd`** — Daemon binary running as a background process.
+
+The CLI communicates with the daemon over a Unix Domain Socket (HTTP via `go-chi/chi`). Job data is persisted in a local SQLite database at `~/.pyrunner/jobs.sqlite`.
 
 ---
 
-## 📄 License
+## License
 
 MIT © [DropGuard](https://github.com/rememberluo)
