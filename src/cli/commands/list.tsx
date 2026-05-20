@@ -1,10 +1,9 @@
 import { Box, render, Text } from "ink";
-import type { DaemonClient } from "../client";
-import { JobTable } from "../components/JobTable";
-import { StatusBadge } from "../components/StatusBadge";
+import type { DaemonClient } from "@/cli/client";
+import { JobTable } from "@/cli/components/JobTable";
+import { StatusBadge } from "@/cli/components/StatusBadge";
 
 export async function listCommand(client: DaemonClient) {
-  const _status = await client.getDaemonStatus();
   const jobs = await client.listJobs();
 
   render(

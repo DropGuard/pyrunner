@@ -1,6 +1,6 @@
 import type { Kysely } from "kysely";
-import type { Job, JobStatus, NewJob } from "../shared/types";
-import type { PyrunnerDB } from "./schema";
+import type { PyrunnerDB } from "@/db/schema";
+import type { Job, JobStatus } from "@/shared/types";
 
 export class JobRepository {
   constructor(private db: Kysely<PyrunnerDB>) {}
@@ -37,11 +37,6 @@ export class JobRepository {
       .executeTakeFirst() as Promise<Job | undefined>;
   }
 
-  async updatePid(id: number | undefined, pid: number | null): Promise<void> {
-    if (id === undefined) return;
-    await this.db.updateTable("jobs").set({ pid }).where("id", "=", id).execute();
-  }
-
   async finalize(
     id: number | undefined,
     exitCode: number,
@@ -56,25 +51,25 @@ export class JobRepository {
       .execute();
   }
 
-  async add(job: NewJob): Promise<void> {
+  async add(job: {
+    name: string;
+    script_path: string;
+    cron: string;
+    next_run_time: number;
+  }): Promise<void> {
     await this.db
       .insertInto("jobs")
       .values({
-        name: job.name,
-        script_path: job.script_path,
-        working_dir: job.working_dir,
-        cron: job.cron,
-        timeout: job.timeout ?? 600,
-        next_run_time: job.next_run_time,
+        ...job,
         status: "idle",
-        created_at: Date.now(),
+        pid: null,
       })
       .execute();
   }
 
   async update(
     name: string,
-    data: Partial<Pick<Job, "script_path" | "working_dir" | "cron" | "timeout" | "next_run_time">>,
+    data: Partial<Pick<Job, "script_path" | "cron" | "next_run_time">>,
   ): Promise<void> {
     const keys = Object.keys(data);
     if (keys.length === 0) return;
@@ -84,6 +79,10 @@ export class JobRepository {
   async delete(name: string): Promise<boolean> {
     const result = await this.db.deleteFrom("jobs").where("name", "=", name).executeTakeFirst();
     return result.numDeletedRows > 0;
+  }
+
+  async updatePid(id: number, pid: number | null): Promise<void> {
+    await this.db.updateTable("jobs").set({ pid }).where("id", "=", id).execute();
   }
 
   async cleanupStaleJobs(): Promise<void> {

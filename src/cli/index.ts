@@ -1,21 +1,41 @@
-import { spawnSync } from "node:child_process";
+import { unlink } from "node:fs/promises";
 import { Command } from "commander";
+import { DaemonClient } from "@/cli/client";
+import { addCommand } from "@/cli/commands/add";
+import { editCommand } from "@/cli/commands/edit";
+import { installCommand } from "@/cli/commands/install";
+import { killCommand } from "@/cli/commands/kill";
+import { listCommand } from "@/cli/commands/list";
+import { logsCommand } from "@/cli/commands/logs";
+import { removeCommand } from "@/cli/commands/remove";
+import { runCommand } from "@/cli/commands/run";
+import { startCommand } from "@/cli/commands/start";
+import { stopCommand } from "@/cli/commands/stop";
+import { uninstallCommand } from "@/cli/commands/uninstall";
+import { cliAction } from "@/cli/utils/command";
+import { Config } from "@/shared/config";
+import { getExecutablePath } from "@/utils/process";
 import pkg from "../../package.json" with { type: "json" };
-import { ensureEnv } from "../shared/config";
-import { setupWindowsEncoding } from "../utils/process";
-import { DaemonClient } from "./client";
-import { addCommand } from "./commands/add";
-import { editCommand } from "./commands/edit";
-import { installCommand } from "./commands/install";
-import { killCommand } from "./commands/kill";
-import { listCommand } from "./commands/list";
-import { logsCommand } from "./commands/logs";
-import { removeCommand } from "./commands/remove";
-import { runCommand } from "./commands/run";
-import { startCommand } from "./commands/start";
-import { stopCommand } from "./commands/stop";
-import { uninstallCommand } from "./commands/uninstall";
-import { cliAction } from "./utils/command";
+
+const config = new Config();
+
+/**
+ * Silently cleanup any old binaries left behind by the update process.
+ */
+async function cleanupOldBinary() {
+  try {
+    const { execPath } = getExecutablePath();
+    const oldPath = `${execPath}.old`;
+    if (await Bun.file(oldPath).exists()) {
+      await unlink(oldPath);
+    }
+  } catch (_e) {
+    // Ignore errors as the old binary might still be locked
+  }
+}
+
+// Global initialization
+await cleanupOldBinary();
 
 async function checkUv() {
   try {
@@ -24,23 +44,20 @@ async function checkUv() {
     if (proc.exitCode !== 0) {
       throw new Error("uv returned non-zero exit code");
     }
-  } catch (e) {
+  } catch (_e) {
     console.error("\x1b[31m[Error] 'uv' not found or failed to run.\x1b[0m");
     console.error("[Tip] Install uv: https://docs.astral.sh/uv/getting-started/installation/\n");
     process.exit(1);
   }
 }
 
-// No arguments → start daemon (for auto-launch / double-click)
-if (process.argv.length <= 2) {
-  await setupWindowsEncoding();
-  await ensureEnv();
-  await cliAction(() => startCommand({ hidden: true }))();
-  process.exit(0);
+// Route empty args or just --hidden to the start command automatically
+if (process.argv.length <= 2 || (process.argv.length === 3 && process.argv[2] === "--hidden")) {
+  process.argv.splice(2, 0, "start");
 }
 
 const program = new Command();
-const client = new DaemonClient();
+const client = new DaemonClient(config);
 
 program
   .name("pyrunner")
@@ -49,9 +66,8 @@ program
   )
   .version(pkg.version)
   .hook("preAction", async (_thisCommand, actionCommand) => {
-    if (["help", "version", "start"].includes(actionCommand.name())) return;
-    await ensureEnv();
-    await setupWindowsEncoding();
+    if (["help", "version", "start", "daemon"].includes(actionCommand.name())) return;
+    await config.ensureEnv();
     if (["add", "run"].includes(actionCommand.name())) await checkUv();
   });
 
@@ -81,7 +97,7 @@ program
   .alias("daemon")
   .description("Start the scheduler daemon (default)")
   .option("--hidden", "Run in hidden mode (internal use)")
-  .action(cliAction((options) => startCommand(options)));
+  .action(cliAction((options) => startCommand(config, options)));
 
 program
   .command("stop", { hidden: true })
@@ -122,12 +138,12 @@ program
 program
   .command("install")
   .description("Install pyrunner as a background service")
-  .action(cliAction(() => installCommand()));
+  .action(cliAction(() => installCommand(config)));
 
 program
   .command("uninstall")
   .description("Uninstall pyrunner background service")
   .option("-w, --wipe", "Remove all data (database and logs)")
-  .action(cliAction((options) => uninstallCommand(options)));
+  .action(cliAction((options) => uninstallCommand(config, options)));
 
 await program.parseAsync();

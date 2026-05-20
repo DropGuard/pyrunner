@@ -31,12 +31,12 @@ jobs:
 
       - run: bun install --frozen-lockfile
 
-      - run: bun scripts/build-platform.ts ${{ matrix.target }}
+      - run: bun scripts/build.ts platform ${{ matrix.target }}
 
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
-          path: platform-packages/${{ matrix.target }}/
+          path: dist/platforms/${{ matrix.target }}/
 
   publish:
     needs: build
@@ -51,17 +51,17 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          path: platform-packages
+          path: dist/platforms
 
       - run: |
-          mkdir -p platform-packages/windows-x64/bin
-          mkdir -p platform-packages/linux-x64/bin
-          mkdir -p platform-packages/darwin-arm64/bin
-          mkdir -p platform-packages/darwin-x64/bin
+          mkdir -p dist/platforms/windows-x64
+          mkdir -p dist/platforms/linux-x64
+          mkdir -p dist/platforms/darwin-arm64
+          mkdir -p dist/platforms/darwin-x64
 
       - name: Verify artifacts
         run: |
-          ls -la platform-packages/*/bin/
+          ls -la dist/platforms/*/
 
       - name: Publish platform packages
         env:
@@ -70,20 +70,20 @@ jobs:
           npm config set //registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}
           for target in windows-x64 linux-x64 darwin-arm64; do
             echo "Publishing @dropguard/pyrunner-${target}..."
-            cd platform-packages/${target}
+            cd dist/platforms/${target}
             npm publish --access public || echo "Already published or failed"
             cd ../..
           done
 
       - name: Prepare main package
-        run: bun scripts/prepare-publish.ts
+        run: bun scripts/build.ts publish
 
       - name: Publish main package
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           npm config set //registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}
-          npm publish dist-publish/ --access public
+          npm publish dist/publish/ --access public
 
   github-release:
     needs: build
@@ -96,18 +96,18 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          path: platform-packages
+          path: dist/platforms
 
       - name: Rename binaries for release
         run: |
           VERSION=${GITHUB_REF_NAME#v}
-          mv platform-packages/windows-x64/bin/pyrunner.exe platform-packages/windows-x64/bin/pyrunner-${VERSION}-windows-x64.exe
-          mv platform-packages/linux-x64/bin/pyrunner platform-packages/linux-x64/bin/pyrunner-${VERSION}-linux-x64
-          mv platform-packages/darwin-arm64/bin/pyrunner platform-packages/darwin-arm64/bin/pyrunner-${VERSION}-darwin-arm64
+          mv dist/platforms/windows-x64/pyrunner.exe dist/platforms/windows-x64/pyrunner-${VERSION}-windows-x64.exe
+          mv dist/platforms/linux-x64/pyrunner dist/platforms/linux-x64/pyrunner-${VERSION}-linux-x64
+          mv dist/platforms/darwin-arm64/pyrunner dist/platforms/darwin-arm64/pyrunner-${VERSION}-darwin-arm64
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            platform-packages/*/bin/*
+            dist/platforms/*/*pyrunner*
           generate_release_notes: true

@@ -6,16 +6,16 @@ describe("CLI Installation Logic", () => {
   test("getExecutablePath returns structured path info", () => {
     const info = getExecutablePath("C:\\path\\to\\pyrunner.exe", "C:\\bun.exe");
     expect(info.main).toContain("pyrunner.exe");
-    expect(info.exe).toContain("bun.exe");
+    expect(info.execPath).toContain("bun.exe");
   });
 
   test("AutoLaunch can be initialized without throwing", () => {
     // This verifies providing a path prevents the constructor from throwing
-    const { exe } = getExecutablePath();
+    const { execPath } = getExecutablePath();
     expect(() => {
       new AutoLaunch({
         name: "PyRunner-Test",
-        path: exe,
+        path: execPath,
       });
     }).not.toThrow();
   });

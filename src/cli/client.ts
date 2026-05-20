@@ -1,35 +1,46 @@
-import { DAEMON_IPC_PATH, getDaemonUrl } from "../shared/config";
-import { ApiError, DaemonOfflineError } from "../shared/errors";
+import type { Config } from "@/shared/config";
+import { ApiError, DaemonOfflineError } from "@/shared/errors";
 import type {
   AddJobRequest,
-  ApiResponse,
   DaemonStatus,
   EditJobRequest,
   Job,
   LogContent,
-} from "../shared/types";
+  Response,
+} from "@/shared/types";
 
 export class DaemonClient {
-  private baseUrl: string;
+  private baseURL: string;
 
-  constructor() {
-    this.baseUrl = getDaemonUrl();
+  constructor(private config: Config) {
+    this.baseURL = config.daemonUrl;
   }
 
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
     try {
-      const res = await fetch(`${this.baseUrl}${path}`, {
+      const res = await fetch(`${this.baseURL}${path}`, {
         method,
-        unix: DAEMON_IPC_PATH,
+        unix: this.config.daemonIpcPath,
         headers: body ? { "Content-Type": "application/json" } : {},
         body: body ? JSON.stringify(body) : undefined,
       });
-      const json = (await res.json()) as ApiResponse<T>;
+      const json = (await res.json()) as Response<T>;
       if (!json.ok) throw new ApiError(json.error, json.code);
       return json.data;
     } catch (err) {
       if (err instanceof ApiError) throw err;
-      if (err instanceof TypeError || (err instanceof Error && err.message.includes("fetch"))) {
+
+      // Robust detection of connection failures (daemon offline)
+      const isConnectionError =
+        err instanceof TypeError ||
+        (err instanceof Error &&
+          (err.message.includes("fetch") ||
+            err.message.includes("typo in the url or port") ||
+            err.message.includes("connection refused") ||
+            (err as any).code === "ECONNREFUSED" ||
+            ((err as any).cause && (err as any).cause.code === "ECONNREFUSED")));
+
+      if (isConnectionError) {
         throw new DaemonOfflineError();
       }
       throw err;

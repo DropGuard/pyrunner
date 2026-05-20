@@ -1,32 +1,24 @@
 import { expect, test } from "bun:test";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
-import { mkdir, rm } from "node:fs/promises";
-import { DaemonClient } from "../src/cli/client";
+import { $ } from "bun";
 
-const TEST_DIR = join(tmpdir(), `pyrunner-test-${Date.now()}`);
+const tmpDir = process.env.TEMP || process.env.TMP || "/tmp";
+const join = (...parts: string[]) => parts.join("/").replace(/\/+/g, "/");
+const TEST_DIR = join(tmpDir, `pyrunner-test-${Date.now()}`);
 process.env.PYRUNNER_DIR = TEST_DIR;
 
 test("Client-Server Communication via Unix Socket", async () => {
-  await mkdir(TEST_DIR, { recursive: true });
-  const IPC_PATH = join(TEST_DIR, "daemon.sock");
+  await $`mkdir -p ${TEST_DIR}`;
+
+  // Dynamic import after env var is set
+  const { DaemonClient } = await import("../src/cli/client");
+  const { Config } = await import("../src/shared/config");
+  const config = new Config();
 
   const daemonProcess = Bun.spawn(["bun", "src/cli/index.ts", "start"], {
-    env: { ...process.env, PYRUNNER_DIR: TEST_DIR },
+    env: { ...process.env, PYRUNNER_DIR: TEST_DIR, NODE_ENV: "test" },
     stdout: "pipe",
     stderr: "pipe",
   });
-
-  // Wait for the IPC file to actually exist
-  let socketExists = false;
-  for (let i = 0; i < 50; i++) {
-    const { existsSync } = await import("node:fs");
-    if (existsSync(IPC_PATH)) {
-      socketExists = true;
-      break;
-    }
-    await new Promise(r => setTimeout(r, 100));
-  }
 
   let daemonOutput = "";
   (async () => {
@@ -39,8 +31,8 @@ test("Client-Server Communication via Unix Socket", async () => {
   })();
 
   try {
-    const client = new DaemonClient();
-    
+    const client = new DaemonClient(config);
+
     let ready = false;
     let lastError = "";
     for (let i = 0; i < 50; i++) {
@@ -52,15 +44,16 @@ test("Client-Server Communication via Unix Socket", async () => {
         }
       } catch (e: any) {
         lastError = e.message;
-        await new Promise(r => setTimeout(r, 200));
+        await new Promise((r) => setTimeout(r, 200));
       }
     }
 
     if (!ready) {
+      console.log("Daemon Startup Failed");
       console.log("Daemon Output:\n", daemonOutput);
       console.log("Last Error:", lastError);
+      throw new Error(`Daemon not ready: ${lastError}`);
     }
-    expect(ready).toBe(true);
 
     const status = await client.getDaemonStatus();
     expect(status.pid).toBeDefined();
@@ -71,9 +64,12 @@ test("Client-Server Communication via Unix Socket", async () => {
     await client.shutdown();
     await daemonProcess.exited;
     expect(daemonProcess.exitCode).toBe(0);
-
+  } catch (e: any) {
+    console.log("Test Failure Output:");
+    console.log("Daemon Output:\n", daemonOutput);
+    throw e;
   } finally {
     daemonProcess.kill();
-    await rm(TEST_DIR, { recursive: true, force: true });
+    await $`rm -rf ${TEST_DIR}`;
   }
 }, 30000);

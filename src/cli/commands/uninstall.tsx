@@ -1,38 +1,12 @@
-import { rm } from "node:fs/promises";
 import { ConfirmInput } from "@inkjs/ui";
-import AutoLaunch from "auto-launch";
 import { Box, render, Text } from "ink";
-import { BIN_DIR, DAEMON_IPC_PATH, getDaemonUrl, PYRUNNER_DIR } from "../../shared/config";
-import { getExecutablePath } from "../../utils/process";
-import { SuccessMsg } from "../components/SuccessMsg";
+import { SuccessMsg } from "@/cli/components/SuccessMsg";
+import { uninstallService } from "@/cli/lifecycle/installer";
+import type { Config } from "@/shared/config";
 
-export async function uninstallCommand(options: { wipe?: boolean } = {}) {
-  // 1. Stop daemon via API if running
-  const shutdownUrl = `${getDaemonUrl()}/api/v1/daemon/shutdown`;
-  await fetch(shutdownUrl, {
-    method: "POST",
-    unix: DAEMON_IPC_PATH,
-  }).catch(() => null);
-
-  // 2. Disable AutoLaunch
-  const { exe } = getExecutablePath();
-  const autoLauncher = new AutoLaunch({
-    name: "PyRunner",
-    path: exe,
-  });
-  await autoLauncher.disable();
-
-  // 3. Cleanup logic
-  const cleanup = async (wipe: boolean) => {
-    if (wipe) {
-      await rm(PYRUNNER_DIR, { recursive: true, force: true });
-    } else {
-      await rm(BIN_DIR, { recursive: true, force: true });
-    }
-  };
-
+export async function uninstallCommand(config: Config, options: { wipe?: boolean } = {}) {
   if (options.wipe) {
-    await cleanup(true);
+    await uninstallService(config, true);
     render(<SuccessMsg message="PyRunner uninstalled and all data wiped." />);
     return;
   }
@@ -43,12 +17,12 @@ export async function uninstallCommand(options: { wipe?: boolean } = {}) {
       <Text color="yellow">Do you want to completely remove all data (database and logs)?</Text>
       <ConfirmInput
         onConfirm={async () => {
-          await cleanup(true);
+          await uninstallService(config, true);
           unmount();
           render(<SuccessMsg message="PyRunner uninstalled and all data wiped." />);
         }}
         onCancel={async () => {
-          await cleanup(false);
+          await uninstallService(config, false);
           unmount();
           render(<SuccessMsg message="PyRunner uninstalled. Data kept in ~/.pyrunner" />);
         }}

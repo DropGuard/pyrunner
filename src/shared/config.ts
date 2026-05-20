@@ -1,25 +1,42 @@
-import { mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { $ } from "bun";
 
-export const PYRUNNER_DIR = join(homedir(), ".pyrunner");
-export const BIN_DIR = join(PYRUNNER_DIR, "bin");
-export const LOGS_DIR = join(PYRUNNER_DIR, "logs");
+export class Config {
+  constructor(private env: Record<string, string | undefined> = process.env) {}
 
-export const DAEMON_IPC_PATH = join(PYRUNNER_DIR, "daemon.sock");
+  get pyrunnerDir() {
+    return this.env.PYRUNNER_DIR || join(homedir(), ".pyrunner");
+  }
 
-export const DEFAULT_TIMEOUT = 600; // 10 minutes
+  get binDir() {
+    return join(this.pyrunnerDir, "bin");
+  }
 
-export const DB_PATH =
-  process.env.PYRUNNER_DB_PATH ||
-  (process.env.NODE_ENV === "test" ? ":memory:" : join(PYRUNNER_DIR, "jobs.sqlite"));
+  get logsDir() {
+    return join(this.pyrunnerDir, "logs");
+  }
 
-export async function ensureEnv() {
-  await mkdir(PYRUNNER_DIR, { recursive: true });
-  await mkdir(BIN_DIR, { recursive: true });
-  await mkdir(LOGS_DIR, { recursive: true });
-}
+  get daemonIpcPath() {
+    return join(this.pyrunnerDir, "daemon.sock");
+  }
 
-export function getDaemonUrl(): string {
-  return "http://localhost";
+  get defaultTimeout() {
+    return 600; // 10 minutes
+  }
+
+  get dbPath() {
+    return (
+      this.env.PYRUNNER_DB_PATH ||
+      (this.env.NODE_ENV === "test" ? ":memory:" : join(this.pyrunnerDir, "jobs.sqlite"))
+    );
+  }
+
+  async ensureEnv() {
+    await $`mkdir -p ${this.pyrunnerDir} ${this.binDir} ${this.logsDir}`;
+  }
+
+  get daemonUrl(): string {
+    return "http://localhost";
+  }
 }

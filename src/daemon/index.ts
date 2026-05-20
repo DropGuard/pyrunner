@@ -1,62 +1,83 @@
-import { unlink } from "node:fs/promises";
-import { createDb } from "../db/index";
-import { JobRepository } from "../db/job-repository";
-import { DAEMON_IPC_PATH, ensureEnv } from "../shared/config";
-import { logger } from "../utils/logger";
-import { killProcessTree } from "../utils/process";
-import { executeJob } from "./executor";
-import { createRoutes } from "./routes";
-import { scheduler } from "./scheduler";
+import { executeJob } from "@/daemon/executor";
+import { createRoutes } from "@/daemon/routes";
+import { CronJobManager } from "@/daemon/scheduler";
+import { createDb } from "@/db/index";
+import { JobRepository } from "@/db/job-repository";
+import type { Config } from "@/shared/config";
+import { initLogger, logger } from "@/utils/logger";
 
-export async function runDaemon(_options?: { hidden?: boolean }) {
-  await ensureEnv();
+export async function runDaemon(config: Config, _options?: { hidden?: boolean }) {
+  await config.ensureEnv();
+  initLogger(config.logsDir);
+
+  const ipcPath = config.daemonIpcPath;
 
   // Socket cleanup: we don't care if it fails due to ENOENT
-  await unlink(DAEMON_IPC_PATH).catch((e) => {
-    if (e.code !== "ENOENT") logger.warn(`Socket cleanup failed: ${e.message}`);
-  });
+  try {
+    await Bun.file(ipcPath).delete();
+  } catch (e: unknown) {
+    if (e && typeof e === "object" && "code" in e && e.code !== "ENOENT") {
+      logger.warn(`Socket cleanup failed: ${(e as any).message}`);
+    }
+  }
 
-  const db = createDb();
+  const db = createDb(config.dbPath);
   const repo = new JobRepository(db);
+  const scheduler = new CronJobManager(config, repo, executeJob);
 
   try {
     await repo.cleanupStaleJobs();
-    scheduler.initialize(repo, executeJob);
 
     const allJobs = await repo.getAll();
-    allJobs.forEach((job) => scheduler.schedule(job));
+    const now = Date.now();
+    for (const job of allJobs) {
+      if (job.next_run_time <= now && job.status !== "running") {
+        logger.info(`Catching up missed job: ${job.name}`);
+        // Fire asynchronously to not block startup
+        repo.markAsRunning(job.id).then((updated) => {
+          if (updated) {
+            executeJob(repo, updated, config).catch((err) => {
+              logger.error(`Unhandled error catching up job ${updated.name}:`, err);
+            });
+          }
+        });
+      }
+      scheduler.schedule(job);
+    }
 
-    const app = createRoutes(repo, scheduler, executeJob);
+    // Proper shutdown signal handling
+    const { promise: shutdownPromise, resolve: triggerShutdown } = Promise.withResolvers<void>();
 
-    Bun.serve({
+    const app = createRoutes(repo, scheduler, executeJob, triggerShutdown, config);
+
+    const server = Bun.serve({
       fetch: app.fetch,
-      unix: DAEMON_IPC_PATH,
+      unix: ipcPath,
     });
 
-    console.log("========================================");
-    console.log("       PyRunner Daemon Started");
-    console.log("========================================");
-    console.log(`Time: ${new Date().toLocaleString()}`);
-    console.log(`IPC:  ${DAEMON_IPC_PATH}`);
-    console.log(`Monitoring ${allJobs.length} tasks`);
-    console.log("----------------------------------------");
+    logger.info("========================================");
+    logger.info("       PyRunner Daemon Started");
+    logger.info("========================================");
+    logger.info(`IPC:  ${ipcPath}`);
+    logger.info(`Monitoring ${allJobs.length} tasks`);
+    logger.info("----------------------------------------");
 
-    const cleanup = async () => {
-      logger.info("Daemon shutting down...");
+    const cleanup = async (signal: string) => {
+      logger.info(`Daemon shutting down (signal: ${signal})...`);
       scheduler.stopAll();
-
-      const runningJobs = (await repo.getAll()).filter(
-        (j) => j.status === "running" && j.pid !== null,
-      );
-      
-      await Promise.all(runningJobs.map(j => killProcessTree(j.pid!, true)));
+      server.stop();
       await db.destroy();
       process.exit(0);
     };
 
-    process.on("SIGINT", cleanup);
-    process.on("SIGTERM", cleanup);
+    process.on("SIGINT", () => triggerShutdown());
+    process.on("SIGTERM", () => triggerShutdown());
 
+    // Wait for shutdown trigger (from API or signals)
+    await shutdownPromise;
+    setTimeout(() => {
+      cleanup("TRIGGER").catch(() => {});
+    }, 100);
   } catch (error) {
     logger.error("Daemon startup error:", error);
     process.exit(1);

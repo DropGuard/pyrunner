@@ -5,6 +5,8 @@ node_modules
 out
 dist
 *.tgz
+pyrunner.exe
+*.exe
 
 # code coverage
 coverage
@@ -32,9 +34,7 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
 # Finder (MacOS) folder config
 .DS_Store
-*.exe
 *.sqlite*
-platform-packages/
 .claude/
 .gemini/
 .gitnexus/

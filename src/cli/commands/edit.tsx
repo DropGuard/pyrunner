@@ -1,23 +1,24 @@
 import { resolve } from "node:path";
-import { render } from "ink";
-import type { DaemonClient } from "../client";
-import { SuccessMsg } from "../components/SuccessMsg";
+import { Box, render, Text } from "ink";
+import type { DaemonClient } from "@/cli/client";
+import { SuccessMsg } from "@/cli/components/SuccessMsg";
+import type { EditJobRequest } from "@/shared/types";
 
 export async function editCommand(
   client: DaemonClient,
   name: string,
   options: { script?: string; cron?: string },
 ) {
-  if (!options.script && !options.cron) {
-    render(<SuccessMsg message="No changes specified." />);
-    return;
-  }
+  const updates: EditJobRequest = {
+    script_path: options.script ? resolve(options.script) : undefined,
+    cron: options.cron,
+  };
 
-  const updates = { ...options };
-  if (updates.script) {
-    updates.script = resolve(process.cwd(), updates.script);
-  }
-
-  await client.editJob(name, updates);
-  render(<SuccessMsg message={`Task '${name}' updated.`} />);
+  const result = await client.editJob(name, updates);
+  render(
+    <Box flexDirection="column">
+      <SuccessMsg message={`Task '${name}' updated.`} />
+      <Text dimColor>Next run: {new Date(result.next_run_time).toLocaleString()}</Text>
+    </Box>,
+  );
 }

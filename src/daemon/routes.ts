@@ -1,23 +1,29 @@
-import { readFile, stat } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { Hono } from "hono";
-import type { JobRepository } from "../db/job-repository";
-import { DAEMON_IPC_PATH, LOGS_DIR } from "../shared/config";
-import { JobStatus } from "../shared/types";
-import { calculateNextRun } from "../utils/cron";
-import { killProcessTree } from "../utils/process";
-import type { executeJob } from "./executor";
-import type { scheduler } from "./scheduler";
+import type { executeJob } from "@/daemon/executor";
+import type { CronJobManager } from "@/daemon/scheduler";
+import type { JobRepository } from "@/db/job-repository";
+import type { Config } from "@/shared/config";
+import { ErrorCode } from "@/shared/errors";
+import { JobStatus, type Response } from "@/shared/types";
+import { calculateNextRun } from "@/utils/cron";
+import { killProcessTree } from "@/utils/process";
 
 export function createRoutes(
   repo: JobRepository,
-  schedulerInstance: typeof scheduler,
+  schedulerInstance: CronJobManager,
   executeJobFn: typeof executeJob,
+  triggerShutdown: () => void,
+  config: Config,
 ): Hono {
   const app = new Hono();
 
-  const ok = <T>(data: T) => ({ ok: true as const, data });
-  const err = (error: string, code: string) => ({ ok: false as const, error, code });
+  const ok = <T>(data: T): Response<T> => ({ ok: true as const, data });
+  const err = (error: string, code: ErrorCode): Response<never> => ({
+    ok: false as const,
+    error,
+    code,
+  });
 
   // Health
   app.get("/api/v1/health", (c) =>
@@ -30,7 +36,7 @@ export function createRoutes(
     return c.json(
       ok({
         pid: process.pid,
-        ipc: DAEMON_IPC_PATH,
+        ipc: config.daemonIpcPath,
         jobCount: jobs.length,
         uptime: process.uptime(),
       }),
@@ -47,28 +53,28 @@ export function createRoutes(
   app.get("/api/v1/jobs/:name", async (c) => {
     const name = c.req.param("name");
     const job = await repo.getByName(name);
-    if (!job) return c.json(err(`Task '${name}' not found`, "JOB_NOT_FOUND"), 404);
+    if (!job) return c.json(err(`Task '${name}' not found`, ErrorCode.JobNotFound), 404);
     return c.json(ok(job));
   });
 
   // Add job
   app.post("/api/v1/jobs", async (c) => {
     const body = await c.req.json();
-    const { name, script_path, cron, timeout } = body;
+    const { name, script_path, cron } = body;
 
     if (!name || !script_path || !cron) {
       return c.json(
-        err("Missing required fields: name, script_path, cron", "VALIDATION_ERROR"),
+        err("Missing required fields: name, script_path, cron", ErrorCode.ValidationError),
         400,
       );
     }
 
-    const absolutePath = resolve(process.cwd(), script_path);
+    const absolutePath = resolve(script_path);
 
     try {
       calculateNextRun(cron);
     } catch {
-      return c.json(err(`Invalid cron expression: ${cron}`, "VALIDATION_ERROR"), 400);
+      return c.json(err(`Invalid cron expression: ${cron}`, ErrorCode.ValidationError), 400);
     }
 
     const nextRun = calculateNextRun(cron);
@@ -76,9 +82,7 @@ export function createRoutes(
       await repo.add({
         name,
         script_path: absolutePath,
-        working_dir: dirname(absolutePath),
         cron,
-        timeout: timeout ?? 600,
         next_run_time: nextRun,
       });
 
@@ -88,7 +92,7 @@ export function createRoutes(
       return c.json(ok({ name, next_run_time: nextRun }), 201);
     } catch (e) {
       if (e instanceof Error && e.message.includes("UNIQUE")) {
-        return c.json(err(`Task '${name}' already exists`, "NAME_CONFLICT"), 409);
+        return c.json(err(`Task '${name}' already exists`, ErrorCode.NameConflict), 409);
       }
       throw e;
     }
@@ -98,31 +102,27 @@ export function createRoutes(
   app.patch("/api/v1/jobs/:name", async (c) => {
     const name = c.req.param("name");
     const existing = await repo.getByName(name);
-    if (!existing) return c.json(err(`Task '${name}' not found`, "JOB_NOT_FOUND"), 404);
+    if (!existing) return c.json(err(`Task '${name}' not found`, ErrorCode.JobNotFound), 404);
 
     const body = await c.req.json();
     const updates: Record<string, unknown> = {};
 
-    if (body.script) {
-      const absPath = resolve(process.cwd(), body.script);
+    if (body.script_path) {
+      const absPath = resolve(body.script_path);
       updates.script_path = absPath;
-      updates.working_dir = dirname(absPath);
     }
     if (body.cron) {
       try {
         calculateNextRun(body.cron);
       } catch {
-        return c.json(err(`Invalid cron expression: ${body.cron}`, "VALIDATION_ERROR"), 400);
+        return c.json(err(`Invalid cron expression: ${body.cron}`, ErrorCode.ValidationError), 400);
       }
       updates.cron = body.cron;
       updates.next_run_time = calculateNextRun(body.cron);
     }
-    if (body.timeout !== undefined) {
-      updates.timeout = body.timeout;
-    }
 
     if (Object.keys(updates).length === 0) {
-      return c.json(err("No changes specified", "VALIDATION_ERROR"), 400);
+      return c.json(err("No changes specified", ErrorCode.ValidationError), 400);
     }
 
     await repo.update(name, updates);
@@ -137,7 +137,7 @@ export function createRoutes(
     const name = c.req.param("name");
     schedulerInstance.unschedule(name);
     const deleted = await repo.delete(name);
-    if (!deleted) return c.json(err(`Task '${name}' not found`, "JOB_NOT_FOUND"), 404);
+    if (!deleted) return c.json(err(`Task '${name}' not found`, ErrorCode.JobNotFound), 404);
     return c.json(ok({ deleted: name }));
   });
 
@@ -145,18 +145,18 @@ export function createRoutes(
   app.post("/api/v1/jobs/:name/run", async (c) => {
     const name = c.req.param("name");
     const job = await repo.getByName(name);
-    if (!job) return c.json(err(`Task '${name}' not found`, "JOB_NOT_FOUND"), 404);
+    if (!job) return c.json(err(`Task '${name}' not found`, ErrorCode.JobNotFound), 404);
     if (job.status === JobStatus.Running) {
-      return c.json(err(`Task '${name}' is already running`, "ALREADY_RUNNING"), 409);
+      return c.json(err(`Task '${name}' is already running`, ErrorCode.AlreadyRunning), 409);
     }
 
     const updated = await repo.markAsRunning(job.id);
     if (!updated) {
-      return c.json(err(`Task '${name}' is already running`, "ALREADY_RUNNING"), 409);
+      return c.json(err(`Task '${name}' is already running`, ErrorCode.AlreadyRunning), 409);
     }
 
     // Fire and forget
-    executeJobFn(repo, updated, { truncateLog: true }).catch(() => {});
+    executeJobFn(repo, updated, config, { truncateLog: true }).catch(() => {});
 
     return c.json(ok({ triggered: name }));
   });
@@ -165,45 +165,53 @@ export function createRoutes(
   app.post("/api/v1/jobs/:name/kill", async (c) => {
     const name = c.req.param("name");
     const job = await repo.getByName(name);
-    if (!job) return c.json(err(`Task '${name}' not found`, "JOB_NOT_FOUND"), 404);
+    if (!job) return c.json(err(`Task '${name}' not found`, ErrorCode.JobNotFound), 404);
     if (job.status !== JobStatus.Running || !job.pid) {
-      return c.json(err(`Task '${name}' is not running`, "VALIDATION_ERROR"), 400);
+      return c.json(err(`Task '${name}' is not running`, ErrorCode.ValidationError), 400);
     }
 
-    await killProcessTree(job.pid);
-    await repo.finalize(job.id, -1, job.next_run_time, JobStatus.Idle);
-    return c.json(ok({ killed: name }));
+    try {
+      await killProcessTree(job.pid, true);
+      return c.json(ok({ killed: name }));
+    } catch (e) {
+      return c.json(err(`Failed to kill task: ${e}`, ErrorCode.ValidationError), 500);
+    }
   });
 
   // Kill all
   app.post("/api/v1/jobs/kill-all", async (c) => {
-    const jobs = (await repo.getAll()).filter(
-      (j) => j.status === JobStatus.Running && j.pid !== null,
-    );
+    const jobs = await repo.getAll();
+    let killed = 0;
     for (const job of jobs) {
-      if (job.pid !== null) await killProcessTree(job.pid);
-      await repo.finalize(job.id, -1, job.next_run_time, JobStatus.Idle);
+      if (job.status === JobStatus.Running && job.pid) {
+        try {
+          await killProcessTree(job.pid, true);
+          killed++;
+        } catch (e) {
+          // ignore
+        }
+      }
     }
-    return c.json(ok({ killed: jobs.length }));
+    return c.json(ok({ killed }));
   });
 
   // Get logs for a job
   app.get("/api/v1/jobs/:name/logs", async (c) => {
     const name = c.req.param("name");
     const job = await repo.getByName(name);
-    if (!job) return c.json(err(`Task '${name}' not found`, "JOB_NOT_FOUND"), 404);
+    if (!job) return c.json(err(`Task '${name}' not found`, ErrorCode.JobNotFound), 404);
 
     const lines = parseInt(c.req.query("lines") || "0", 10) || 0;
-    const logPath = join(LOGS_DIR, `${name}.log`);
+    const logPath = join(config.logsDir, `${name}.log`);
 
     try {
-      const content = await readFile(logPath, "utf-8");
+      const content = await Bun.file(logPath).text();
       if (lines > 0) {
         const allLines = content.split("\n");
         return c.json(ok({ content: allLines.slice(-lines).join("\n") }));
       }
       return c.json(ok({ content }));
-    } catch (e: any) {
+    } catch (_e: any) {
       return c.json(ok({ content: "" }));
     }
   });
@@ -212,19 +220,22 @@ export function createRoutes(
   app.get("/api/v1/logs", async (c) => {
     const jobs = await repo.getAll();
     const logs: Record<string, string> = {};
+    const logsDir = config.logsDir;
     for (const job of jobs) {
-      const logPath = join(LOGS_DIR, `${job.name}.log`);
+      const logPath = join(logsDir, `${job.name}.log`);
       try {
-        const content = await readFile(logPath, "utf-8");
-        // Extract only the last execution block
-        const blocks = content.split(/--- \[\d{4}\] ---/);
+        const content = await Bun.file(logPath).text();
+        // Extract only the last execution block using the new log marker format
+        const markerRegex = /={80}\n\[RUN STARTED\]/g;
+        const blocks = content.split(markerRegex);
+
         if (blocks.length > 1) {
-          // Get the last non-empty block and re-attach the marker for context
+          // Get the last non-empty block
           const lastBlock = blocks[blocks.length - 1];
-          // Find the original marker in the content to keep the full output correct
-          const allMatches = [...content.matchAll(/--- \[\d{4}\] ---/g)];
-          const lastMatch = allMatches[allMatches.length - 1];
-          logs[job.name] = lastMatch[0] + lastBlock;
+          // Re-attach the stripped marker for context
+          logs[job.name] =
+            "================================================================================\n[RUN STARTED]" +
+            (lastBlock || "");
         } else {
           logs[job.name] = content;
         }
@@ -237,7 +248,7 @@ export function createRoutes(
 
   // Shutdown
   app.post("/api/v1/daemon/shutdown", (c) => {
-    process.nextTick(() => process.emit("SIGTERM"));
+    triggerShutdown();
     return c.json(ok({ shutting_down: true }));
   });
 

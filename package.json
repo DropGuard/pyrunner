@@ -1,6 +1,6 @@
 {
   "name": "@dropguard/pyrunner",
-  "version": "0.1.29",
+  "version": "0.1.30",
   "description": "Lightweight cross-platform Python script scheduler via Bun and uv",
   "license": "MIT",
   "author": "DropGuard <rememberluo@hotmail.com>",
@@ -26,9 +26,11 @@
     "bin.js"
   ],
   "private": false,
+  "browser": false,
   "scripts": {
-    "build": "bun build.ts",
-    "build:all": "bun scripts/build-platform.ts windows-x64 && bun scripts/build-platform.ts linux-x64 && bun scripts/build-platform.ts darwin-arm64 && bun scripts/build-platform.ts darwin-x64",
+    "build": "bun scripts/build.ts local",
+    "build:all": "bun scripts/build.ts all",
+    "build:publish": "bun scripts/build.ts publish",
     "test": "bun test",
     "format": "biome format --write .",
     "lint": "biome check .",
@@ -50,5 +52,9 @@
     "react-devtools-core": "^7.0.1",
     "tree-kill": "^1.2.2"
   },
-  "optionalDependencies": {}
+  "optionalDependencies": {},
+  "dependencies": {
+    "pino": "^10.3.1",
+    "pino-pretty": "^13.1.3"
+  }
 }

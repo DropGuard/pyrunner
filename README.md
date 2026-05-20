@@ -20,6 +20,28 @@
 
 ## 📦 Installation
 
+Choose one of the following installation methods:
+
+### Method 1: One-liner Script (Recommended 🌟)
+
+No Node.js, NPM, or Bun runtime required. Automatically downloads the native binary for your platform, adds it to your user PATH, and installs the background daemon.
+
+#### Windows (PowerShell)
+```powershell
+iwr -useb https://raw.githubusercontent.com/DropGuard/pyrunner/main/scripts/install.ps1 | iex
+```
+
+#### macOS / Linux (Bash)
+```bash
+curl -fsSL https://raw.githubusercontent.com/DropGuard/pyrunner/main/scripts/install.sh | bash
+```
+
+---
+
+### Method 2: Via NPM (Global Package)
+
+Use this if you already have Node.js / NPM installed in your local environment:
+
 ```bash
 npm install -g @dropguard/pyrunner
 ```

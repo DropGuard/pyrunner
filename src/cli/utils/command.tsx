@@ -1,5 +1,5 @@
 import { render } from "ink";
-import { ErrorBox } from "../components/ErrorBox";
+import { ErrorBox } from "@/cli/components/ErrorBox";
 
 /**
  * Wraps a CLI command action with global error handling.

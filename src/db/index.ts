@@ -1,6 +1,5 @@
 import { Database } from "bun:sqlite";
 import { Kysely, SqliteDialect } from "kysely";
-import { DB_PATH } from "../shared/config";
 import type { PyrunnerDB } from "./schema";
 
 export type { PyrunnerDB } from "./schema";
@@ -44,7 +43,7 @@ function wrapBunSqlite(db: InstanceType<typeof Database>) {
   };
 }
 
-export function createDb(path: string = DB_PATH): Kysely<PyrunnerDB> {
+export function createDb(path: string): Kysely<PyrunnerDB> {
   const sqlite = new Database(path);
   sqlite.exec("PRAGMA journal_mode = WAL");
   sqlite.exec("PRAGMA synchronous = NORMAL");
@@ -54,19 +53,19 @@ export function createDb(path: string = DB_PATH): Kysely<PyrunnerDB> {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT UNIQUE,
       script_path TEXT,
-      working_dir TEXT,
       cron TEXT,
-      timeout INTEGER DEFAULT 600,
       next_run_time INTEGER,
       status TEXT DEFAULT 'idle',
       last_run_time INTEGER,
       last_exit_code INTEGER,
-      pid INTEGER,
-      created_at INTEGER
+      pid INTEGER
     );
     CREATE INDEX IF NOT EXISTS idx_jobs_next_run ON jobs (next_run_time);
     CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs (status);
   `);
+  try {
+    sqlite.exec("ALTER TABLE jobs ADD COLUMN pid INTEGER;");
+  } catch (e) {}
 
   return new Kysely<PyrunnerDB>({
     // biome-ignore lint/suspicious/noExplicitAny: adapter is compatible but types don't match exactly

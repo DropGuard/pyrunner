@@ -1,20 +1,22 @@
 import { Cron } from "croner";
-import type { JobRepository } from "../db/job-repository";
-import type { Job } from "../shared/types";
-import { logger } from "../utils/logger";
+import type { JobRepository } from "@/db/job-repository";
+import type { Config } from "@/shared/config";
+import type { Job } from "@/shared/types";
+import { logger } from "@/utils/logger";
 
 export class CronJobManager {
   private activeJobs = new Map<string, Cron>();
-  private repo!: JobRepository;
-  private executeJobFn!: (repo: JobRepository, job: Job) => Promise<void>;
 
-  initialize(
-    repo: JobRepository,
-    executeJob: (repo: JobRepository, job: Job) => Promise<void>,
-  ): void {
-    this.repo = repo;
-    this.executeJobFn = executeJob;
-  }
+  constructor(
+    private config: Config,
+    private repo: JobRepository,
+    private executeJobFn: (
+      repo: JobRepository,
+      job: Job,
+      config: Config,
+      options?: { truncateLog?: boolean },
+    ) => Promise<void>,
+  ) {}
 
   schedule(job: Job): void {
     this.unschedule(job.name);
@@ -24,7 +26,7 @@ export class CronJobManager {
         .markAsRunning(job.id)
         .then((updated) => {
           if (updated) {
-            this.executeJobFn(this.repo, updated).catch((err) => {
+            this.executeJobFn(this.repo, updated, this.config).catch((err) => {
               logger.error(`Unhandled error in job ${updated.name}:`, err);
             });
           }
@@ -57,5 +59,3 @@ export class CronJobManager {
     return cron?.nextRun() ?? null;
   }
 }
-
-export const scheduler = new CronJobManager();

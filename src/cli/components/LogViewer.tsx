@@ -3,14 +3,14 @@ import { Box, Text } from "ink";
 function renderLines(lines: string[]) {
   return lines.map((line, i) => {
     const key = `${i}-${line.slice(0, 32)}`;
-    if (line.includes("--- RUN STARTED AT")) {
+    if (line.includes("[RUN STARTED]")) {
       return (
         <Text key={key} color="green" bold>
           {line}
         </Text>
       );
     }
-    if (line.includes("--- RUN FINISHED AT")) {
+    if (line.includes("[RUN FINISHED]")) {
       return (
         <Text key={key} color="blue" bold>
           {line}

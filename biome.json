@@ -17,7 +17,22 @@
   "linter": {
     "enabled": true,
     "rules": {
-      "recommended": true
+      "recommended": true,
+      "correctness": {
+        "noUnusedImports": "error",
+        "noUnusedVariables": "error"
+      },
+      "style": {
+        "noRestrictedImports": {
+          "level": "error",
+          "options": {
+            "paths": {
+              "node:fs": "Use Bun.file() or other Bun APIs instead.",
+              "node:http": "Use Bun.serve() or fetch() instead."
+            }
+          }
+        }
+      }
     }
   },
   "javascript": {

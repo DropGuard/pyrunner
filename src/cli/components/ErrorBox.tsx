@@ -1,5 +1,5 @@
 import { Box, Text } from "ink";
-import { DaemonOfflineError } from "../../shared/errors";
+import { DaemonOfflineError } from "@/shared/errors";
 
 export function ErrorBox({ error }: { error: unknown }) {
   if (error instanceof DaemonOfflineError) {

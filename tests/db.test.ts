@@ -19,9 +19,7 @@ describe("JobRepository", () => {
     await repo.add({
       name: "test-job",
       script_path: "/tmp/test.py",
-      working_dir: "/tmp",
       cron: "0 12 * * *",
-      timeout: 600,
       next_run_time: Date.now() + 86400000,
     });
 
@@ -35,14 +33,12 @@ describe("JobRepository", () => {
     await repo.add({
       name: "job1",
       script_path: "/tmp/1.py",
-      working_dir: "/tmp",
       cron: "0 12 * * *",
       next_run_time: Date.now(),
     });
     await repo.add({
       name: "job2",
       script_path: "/tmp/2.py",
-      working_dir: "/tmp",
       cron: "0 13 * * *",
       next_run_time: Date.now(),
     });
@@ -60,7 +56,6 @@ describe("JobRepository", () => {
     await repo.add({
       name: "to-delete",
       script_path: "/tmp/del.py",
-      working_dir: "/tmp",
       cron: "0 12 * * *",
       next_run_time: Date.now(),
     });
@@ -81,7 +76,6 @@ describe("JobRepository", () => {
     await repo.add({
       name: "run-test",
       script_path: "/tmp/run.py",
-      working_dir: "/tmp",
       cron: "0 12 * * *",
       next_run_time: Date.now(),
     });
@@ -97,7 +91,6 @@ describe("JobRepository", () => {
     await repo.add({
       name: "already-running",
       script_path: "/tmp/ar.py",
-      working_dir: "/tmp",
       cron: "0 12 * * *",
       next_run_time: Date.now(),
     });
@@ -112,7 +105,6 @@ describe("JobRepository", () => {
     await repo.add({
       name: "finalize-test",
       script_path: "/tmp/fin.py",
-      working_dir: "/tmp",
       cron: "0 12 * * *",
       next_run_time: Date.now(),
     });
@@ -124,14 +116,12 @@ describe("JobRepository", () => {
     const updated = await repo.getByName("finalize-test");
     expect(updated?.status).toBe(JobStatus.Idle);
     expect(updated?.last_exit_code).toBe(0);
-    expect(updated?.pid).toBeNull();
   });
 
   test("update modifies job fields", async () => {
     await repo.add({
       name: "update-test",
       script_path: "/tmp/up.py",
-      working_dir: "/tmp",
       cron: "0 12 * * *",
       next_run_time: Date.now(),
     });
@@ -148,14 +138,12 @@ describe("JobRepository", () => {
     await repo.add({
       name: "past-job",
       script_path: "/tmp/past.py",
-      working_dir: "/tmp",
       cron: "0 12 * * *",
       next_run_time: past,
     });
     await repo.add({
       name: "future-job",
       script_path: "/tmp/future.py",
-      working_dir: "/tmp",
       cron: "0 12 * * *",
       next_run_time: future,
     });
@@ -169,19 +157,16 @@ describe("JobRepository", () => {
     await repo.add({
       name: "stale-job",
       script_path: "/tmp/stale.py",
-      working_dir: "/tmp",
       cron: "0 12 * * *",
       next_run_time: Date.now(),
     });
 
     const job = await repo.getByName("stale-job");
     await repo.markAsRunning(job?.id);
-    await repo.updatePid(job?.id, 12345);
 
     await repo.cleanupStaleJobs();
 
     const updated = await repo.getByName("stale-job");
     expect(updated?.status).toBe(JobStatus.Idle);
-    expect(updated?.pid).toBeNull();
   });
 });

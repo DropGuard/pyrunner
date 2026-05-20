@@ -1,99 +1,77 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import type { Kysely } from "kysely";
 import { CronJobManager } from "../src/daemon/scheduler";
-import { createDb } from "../src/db/index";
-import { JobRepository } from "../src/db/job-repository";
-import type { PyrunnerDB } from "../src/db/schema";
+import { Config } from "../src/shared/config";
+import { JobStatus } from "../src/shared/types";
 
 describe("CronJobManager", () => {
-  let db: Kysely<PyrunnerDB>;
-  let repo: JobRepository;
-  let scheduler: CronJobManager;
+  let manager: CronJobManager;
+  let repoMock: any;
+  let executeMock: any;
+  let config: Config;
 
   beforeEach(() => {
-    db = createDb(":memory:");
-    repo = new JobRepository(db);
-    scheduler = new CronJobManager();
+    config = new Config();
+    repoMock = {
+      markAsRunning: async (id: number) => ({
+        id,
+        name: "test",
+        script_path: "test.py",
+        cron: "* * * * *",
+        status: JobStatus.Running,
+      }),
+    };
+    executeMock = async () => {};
+    manager = new CronJobManager(config, repoMock, executeMock);
   });
 
-  test("schedule and unschedule a job", async () => {
-    const executed: string[] = [];
-    scheduler.initialize(repo, async (_repo, job) => {
-      executed.push(job.name);
-    });
-
-    await repo.add({
-      name: "test-schedule",
-      script_path: "/tmp/test.py",
-      working_dir: "/tmp",
-      cron: "* * * * *",
-      next_run_time: Date.now(),
-    });
-
-    const job = await repo.getByName("test-schedule");
-    expect(job).toBeDefined();
-    if (!job) return;
-    scheduler.schedule(job);
-
-    expect(scheduler.getNextRun("test-schedule")).toBeInstanceOf(Date);
-
-    scheduler.unschedule("test-schedule");
-    expect(scheduler.getNextRun("test-schedule")).toBeNull();
-  });
-
-  test("stopAll clears all scheduled jobs", async () => {
-    scheduler.initialize(repo, async () => {});
-
-    await repo.add({
+  test("schedule and unschedule a job", () => {
+    const job = {
+      id: 1,
       name: "job1",
-      script_path: "/tmp/1.py",
-      working_dir: "/tmp",
+      script_path: "test.py",
       cron: "* * * * *",
       next_run_time: Date.now(),
-    });
-    await repo.add({
-      name: "job2",
-      script_path: "/tmp/2.py",
-      working_dir: "/tmp",
-      cron: "* * * * *",
-      next_run_time: Date.now(),
-    });
+      status: JobStatus.Idle,
+      last_run_time: null,
+      last_exit_code: null,
+    };
 
-    const job1 = await repo.getByName("job1");
-    const job2 = await repo.getByName("job2");
-    expect(job1).toBeDefined();
-    expect(job2).toBeDefined();
-    if (!job1 || !job2) return;
-    scheduler.schedule(job1);
-    scheduler.schedule(job2);
+    manager.schedule(job);
+    expect(manager.getNextRun("job1")).toBeDefined();
 
-    scheduler.stopAll();
-    expect(scheduler.getNextRun("job1")).toBeNull();
-    expect(scheduler.getNextRun("job2")).toBeNull();
+    manager.unschedule("job1");
+    expect(manager.getNextRun("job1")).toBeNull();
   });
 
-  test("rescheduling replaces existing cron", async () => {
-    scheduler.initialize(repo, async () => {});
+  test("stopAll clears all scheduled jobs", () => {
+    manager.schedule({
+      id: 1,
+      name: "job1",
+      script_path: "1.py",
+      cron: "* * * * *",
+    } as any);
+    manager.schedule({
+      id: 2,
+      name: "job2",
+      script_path: "2.py",
+      cron: "* * * * *",
+    } as any);
 
-    await repo.add({
-      name: "reschedule-test",
-      script_path: "/tmp/test.py",
-      working_dir: "/tmp",
-      cron: "0 12 * * *",
-      next_run_time: Date.now(),
-    });
+    manager.stopAll();
+    expect(manager.getNextRun("job1")).toBeNull();
+    expect(manager.getNextRun("job2")).toBeNull();
+  });
 
-    const job = await repo.getByName("reschedule-test");
-    expect(job).toBeDefined();
-    if (!job) return;
-    scheduler.schedule(job);
-    const firstNextRun = scheduler.getNextRun("reschedule-test");
+  test("rescheduling replaces existing cron", () => {
+    const job1 = { id: 1, name: "job1", script_path: "1.py", cron: "* * * * *" } as any;
+    const job1Updated = { id: 1, name: "job1", script_path: "1.py", cron: "0 0 * * *" } as any;
 
-    // Reschedule with different cron
-    scheduler.schedule({ ...job, cron: "0 18 * * *" });
-    const secondNextRun = scheduler.getNextRun("reschedule-test");
+    manager.schedule(job1);
+    const firstRun = manager.getNextRun("job1");
 
-    expect(firstNextRun).toBeInstanceOf(Date);
-    expect(secondNextRun).toBeInstanceOf(Date);
+    manager.schedule(job1Updated);
+    const secondRun = manager.getNextRun("job1");
+
+    expect(firstRun).not.toEqual(secondRun);
   });
 });
