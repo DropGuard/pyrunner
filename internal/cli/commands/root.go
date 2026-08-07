@@ -38,6 +38,12 @@ var rootCmd = &cobra.Command{
 				return fmt.Errorf("'uv' is not installed. Install it from https://docs.astral.sh/uv/")
 			}
 		}
+		// Check git only for repository-URL adds
+		if name == "add" && len(args) > 0 && IsRemoteSource(args[0]) {
+			if _, err := execLookPath("git"); err != nil {
+				return fmt.Errorf("'git' is not installed; it is required to add tasks from a repository URL")
+			}
+		}
 		return nil
 	},
 }

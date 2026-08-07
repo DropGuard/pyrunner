@@ -2,6 +2,8 @@ package commands
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 )
@@ -16,6 +18,9 @@ func newRemoveCmd() *cobra.Command {
 			if err := client.RemoveJob(args[0]); err != nil {
 				return err
 			}
+			// Best-effort cleanup of the cloned snapshot for git-sourced tasks,
+			// so remove + re-add fetches a fresh copy.
+			os.RemoveAll(filepath.Join(cfg.ReposDir, args[0]))
 			printSuccess(fmt.Sprintf("Task '%s' removed", args[0]))
 			return nil
 		},

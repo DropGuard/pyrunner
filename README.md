@@ -81,11 +81,42 @@ pyrunner uninstall
 
 ---
 
+## Scheduling from a Git Repository
+
+Point `add` at a repository URL instead of a local script — PyRunner clones it
+(shallow snapshot) and schedules it for you.
+
+```bash
+# Clone https://github.com/owner/repo, task name = "repo"
+pyrunner add https://github.com/owner/repo
+
+# A bare "owner/repo" shorthand works too, as do git@ SSH URLs
+pyrunner add owner/repo "*/30 * * * *"
+```
+
+Defaults are the escape hatch:
+
+- **Task name** — derived from the repository name.
+- **Cron** — daily at 12:00 (`0 12 * * *`); change with `pyrunner edit <name> -c`.
+- **Entrypoint** — `main.py` at the repo root, run via `uv run`. If the repo has
+  no `main.py`, `add` warns and still registers the task — point it elsewhere
+  with `pyrunner edit <name> -s <script>`.
+- **Snapshots** — cloned once into `~/.pyrunner/repos/<name>` at add time. To
+  refresh the code, `pyrunner remove <name>` (deletes the snapshot) then `add` again.
+
+Private repositories use your machine's Git credential helper (e.g. `gh auth
+setup-git`) — PyRunner stores no tokens. First run of a repo using Playwright
+needs a one-time `uv run playwright install chromium`; browser binaries are
+shared machine-wide under `~/.cache/ms-playwright`.
+
+---
+
 ## CLI Reference
 
 | Command | Description |
 | :--- | :--- |
 | `add <name> <script> [cron]` | Add a scheduled task (default: daily at noon). |
+| `add <url> [cron]` | Clone a repository and schedule it (task name = repo name). |
 | `list` / `ls` | List all tasks with status and next run time. |
 | `edit <name> -s <script> -c <cron>` | Update a task's script or cron expression. |
 | `remove <name>` / `rm` | Delete a task. |
