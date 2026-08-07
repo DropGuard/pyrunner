@@ -365,10 +365,12 @@ var ShutdownFn func()
 
 func (s *Server) handleShutdown(w http.ResponseWriter, r *http.Request) {
 	writeOK(w, map[string]bool{"shutting_down": true})
-	if ShutdownFn != nil {
+	if fn := ShutdownFn; fn != nil {
+		// Capture fn at schedule time: ShutdownFn is a mutable package var and
+		// may have been replaced by the time the goroutine runs.
 		go func() {
 			time.Sleep(100 * time.Millisecond)
-			ShutdownFn()
+			fn()
 		}()
 	}
 }

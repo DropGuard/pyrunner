@@ -85,6 +85,7 @@ func (e *Executor) ExecuteJob(job *db.Job, truncateLog bool) {
 	stdout, stderr, err := proc.OutputPipes()
 	if err != nil {
 		fmt.Printf("Failed to get pipes for %s: %v\n", job.Name, err)
+		e.appendLog(logPath, fmt.Sprintf("\nERROR: Failed to get output pipes: %v\n", err))
 		close(timeoutDone)
 		nextRun := e.calcNextRun(job, isDue, startTime)
 		e.repo.Finalize(job.ID, -1, nextRun, db.JobStatusFailed)

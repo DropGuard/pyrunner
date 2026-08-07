@@ -2,6 +2,7 @@ package process
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,9 +10,11 @@ import (
 
 // Job represents a running process for a scheduled job.
 type Job struct {
-	Cmd     *exec.Cmd
-	PID     int
-	JobName string
+	Cmd        *exec.Cmd
+	PID        int
+	JobName    string
+	stdoutPipe io.Reader
+	stderrPipe io.Reader
 }
 
 // Spawn starts a Python script via `uv run` and returns the running process.
@@ -27,6 +30,17 @@ func Spawn(scriptPath string) (*Job, error) {
 		"PYTHONIOENCODING=utf-8",
 	)
 
+	// Pipes must be created before Start, or StdoutPipe/StderrPipe fail
+	// with "exec: StdoutPipe after process started".
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("stdout pipe: %w", err)
+	}
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, fmt.Errorf("stderr pipe: %w", err)
+	}
+
 	setHideWindow(cmd)
 
 	if err := cmd.Start(); err != nil {
@@ -36,23 +50,17 @@ func Spawn(scriptPath string) (*Job, error) {
 	setProcessGroup(cmd)
 
 	return &Job{
-		Cmd:     cmd,
-		PID:     cmd.Process.Pid,
-		JobName: filepath.Base(scriptPath),
+		Cmd:        cmd,
+		PID:        cmd.Process.Pid,
+		JobName:    filepath.Base(scriptPath),
+		stdoutPipe: stdoutPipe,
+		stderrPipe: stderrPipe,
 	}, nil
 }
 
 // OutputPipes returns stdout and stderr as readable pipes.
-func (j *Job) OutputPipes() (stdout, stderr interface{ Read([]byte) (int, error) }, err error) {
-	outPipe, err := j.Cmd.StdoutPipe()
-	if err != nil {
-		return nil, nil, fmt.Errorf("stdout pipe: %w", err)
-	}
-	errPipe, err := j.Cmd.StderrPipe()
-	if err != nil {
-		return nil, nil, fmt.Errorf("stderr pipe: %w", err)
-	}
-	return outPipe, errPipe, nil
+func (j *Job) OutputPipes() (stdout, stderr io.Reader, err error) {
+	return j.stdoutPipe, j.stderrPipe, nil
 }
 
 // Wait blocks until the process exits and returns the exit code.

@@ -1,0 +1,8 @@
+#!/bin/sh
+# Fake `uv` used by TestDaemonRunToCompletion (Linux only).
+# The executor invokes `uv run <script>`; this shim turns that into
+# `python3 <script>` so the test needs no uv install and no network.
+if [ "$1" = "run" ]; then
+  shift
+fi
+exec python3 "$@"
