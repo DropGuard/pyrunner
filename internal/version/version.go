@@ -7,7 +7,7 @@ package version
 
 // Version is the semantic version of the PyRunner binaries. Overridden at
 // build time by the Makefile / CI when releasing (see make VERSION=...).
-var Version = "0.2.0"
+var Version = "0.3.0"
 
 // String returns the current version string.
 func String() string {
