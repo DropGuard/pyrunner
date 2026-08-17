@@ -11,6 +11,7 @@ type Config struct {
 	PyrunnerDir    string
 	BinDir         string
 	LogsDir        string
+	ReposDir       string
 	DaemonIpcPath  string
 	DBPath         string
 	DefaultTimeout int // seconds
@@ -29,17 +30,14 @@ func newFromEnv(getenv func(string) string) *Config {
 
 	dbPath := getenv("PYRUNNER_DB_PATH")
 	if dbPath == "" {
-		if getenv("NODE_ENV") == "test" {
-			dbPath = ":memory:"
-		} else {
-			dbPath = filepath.Join(baseDir, "jobs.sqlite")
-		}
+		dbPath = filepath.Join(baseDir, "jobs.sqlite")
 	}
 
 	return &Config{
 		PyrunnerDir:    baseDir,
 		BinDir:         filepath.Join(baseDir, "bin"),
 		LogsDir:        filepath.Join(baseDir, "logs"),
+		ReposDir:       filepath.Join(baseDir, "repos"),
 		DaemonIpcPath:  filepath.Join(baseDir, "daemon.sock"),
 		DBPath:         dbPath,
 		DefaultTimeout: DefaultJobTimeout,
@@ -56,6 +54,7 @@ func ForTest(baseDir string) *Config {
 		PyrunnerDir:    baseDir,
 		BinDir:         filepath.Join(baseDir, "bin"),
 		LogsDir:        filepath.Join(baseDir, "logs"),
+		ReposDir:       filepath.Join(baseDir, "repos"),
 		DaemonIpcPath:  filepath.Join(baseDir, "daemon.sock"),
 		DBPath:         filepath.Join(baseDir, "jobs.sqlite"),
 		DefaultTimeout: DefaultJobTimeout,
@@ -63,7 +62,7 @@ func ForTest(baseDir string) *Config {
 }
 
 func (c *Config) EnsureEnv() error {
-	for _, dir := range []string{c.PyrunnerDir, c.BinDir, c.LogsDir} {
+	for _, dir := range []string{c.PyrunnerDir, c.BinDir, c.LogsDir, c.ReposDir} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err
 		}

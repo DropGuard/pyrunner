@@ -35,8 +35,19 @@ func TestDaemonIntegration(t *testing.T) {
 	scheduler := daemon.NewCronJobManager()
 	executor := daemon.NewExecutor(repo, cfg)
 
-	server := daemon.NewServer(repo, scheduler, executor, cfg)
-	router := server.Router()
+	httpServer := &http.Server{}
+	shutdownFn := func() {
+		scheduler.StopAll()
+		if httpServer != nil {
+			httpServer.Close()
+		}
+		database.Close()
+		os.Remove(cfg.DaemonIpcPath)
+	}
+
+	server := daemon.NewServer(repo, scheduler, executor, cfg, shutdownFn)
+	httpServer = &http.Server{Handler: server.Router()}
+	defer shutdownFn()
 
 	os.Remove(cfg.DaemonIpcPath)
 
@@ -44,22 +55,7 @@ func TestDaemonIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	httpServer := &http.Server{Handler: router}
-
-	daemon.ShutdownFn = func() {
-		scheduler.StopAll()
-		httpServer.Close()
-		database.Close()
-		os.Remove(cfg.DaemonIpcPath)
-	}
-
 	go httpServer.Serve(listener)
-	defer func() {
-		if daemon.ShutdownFn != nil {
-			daemon.ShutdownFn()
-		}
-	}()
 
 	// Wait for daemon to be ready
 	testClient := cli.NewClient(cfg.DaemonIpcPath)
