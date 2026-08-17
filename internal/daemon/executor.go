@@ -20,6 +20,42 @@ type Executor struct {
 	}
 }
 
+// TriggerType identifies why a job is being executed. It drives two things:
+//   - the run-type label written into the job log ("Scheduled"/"CatchUp"/"Manual"), and
+//   - whether next_run_time is advanced after the run.
+//
+// Scheduled (cron fired) and CatchUp (missed slot made up at daemon start)
+// both consume the schedule and advance next_run_time. Manual (user ran it)
+// does NOT advance next_run_time — the user just wants to run it once without
+// disturbing the scheduled cadence.
+type TriggerType int
+
+const (
+	TriggerScheduled TriggerType = iota
+	TriggerCatchUp
+	TriggerManual
+)
+
+// String returns the human-readable label used in logs.
+func (t TriggerType) String() string {
+	switch t {
+	case TriggerScheduled:
+		return "Scheduled"
+	case TriggerCatchUp:
+		return "CatchUp"
+	case TriggerManual:
+		return "Manual"
+	default:
+		return "Unknown"
+	}
+}
+
+// advancesNextRun reports whether this trigger consumes the schedule slot and
+// should advance next_run_time.
+func (t TriggerType) advancesNextRun() bool {
+	return t == TriggerScheduled || t == TriggerCatchUp
+}
+
 func NewExecutor(repo *db.Repository, cfg interface {
 	GetLogsDir() string
 	GetDefaultTimeout() int
@@ -27,29 +63,54 @@ func NewExecutor(repo *db.Repository, cfg interface {
 	return &Executor{repo: repo, config: cfg}
 }
 
-func (e *Executor) ExecuteJob(job *db.Job, truncateLog bool) {
+func (e *Executor) ExecuteJob(job *db.Job, trigger TriggerType) {
 	logPath := filepath.Join(e.config.GetLogsDir(), job.Name+".log")
 	startTime := time.Now()
 
-	isDue := job.NextRunTime <= startTime.UnixMilli()
-	runType := "Scheduled"
-	if !isDue {
-		runType = "Manual"
-	}
+	runType := trigger.String()
 
 	fmt.Printf("[%s] Starting job: %s\n", runType, job.Name)
 
-	// Handle log rotation/truncation
-	if truncateLog {
-		os.WriteFile(logPath, []byte{}, 0o644)
-	} else {
-		if info, err := os.Stat(logPath); err == nil && info.Size() > 5*1024*1024 {
-			os.Rename(logPath, logPath+".old")
+	// Mark the job as running and stamp last_run_time. Every trigger path
+	// (daemon scheduler, catch-up, API create/edit, manual run) funnels
+	// through ExecuteJob, so stamping here guarantees last_run_time is kept
+	// in sync and status is set to running while the process is in flight.
+	// MarkAsRunning is idempotent (WHERE status != running): the manual
+	// handler may have already stamped it, in which case the update is a no-op.
+	if updated, err := e.repo.MarkAsRunning(job.ID); err == nil && updated != nil {
+		job.LastRunTime = updated.LastRunTime
+	}
+
+	// Rotate the log if it has grown past 5 MiB so the file never runs away.
+	// Newer content goes to <name>.log, the previous content to <name>.log.old.
+	if info, err := os.Stat(logPath); err == nil && info.Size() > 5*1024*1024 {
+		os.Rename(logPath, logPath+".old")
+	}
+
+	// Open the log once and reuse the handle for every write in this run,
+	// instead of opening/closing on each append (which is wasteful when a
+	// chatty script emits thousands of lines). All writes are serialized by
+	// mu, so the handle is never accessed concurrently.
+	logMu := &sync.Mutex{}
+	logFile, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		// Fall back to no-op logging rather than aborting the run.
+		fmt.Printf("Failed to open log %s: %v\n", logPath, err)
+	}
+	if logFile != nil {
+		defer logFile.Close()
+	}
+	writeLog := func(content string) {
+		if logFile == nil {
+			return
 		}
+		logMu.Lock()
+		defer logMu.Unlock()
+		logFile.WriteString(content)
 	}
 
 	// Write run header
-	e.appendLog(logPath, fmt.Sprintf(
+	writeLog(fmt.Sprintf(
 		"\n================================================================================\n"+
 			"[RUN STARTED] | Type: %s | Time: %s\n"+
 			"================================================================================\n",
@@ -60,9 +121,9 @@ func (e *Executor) ExecuteJob(job *db.Job, truncateLog bool) {
 	proc, err := process.Spawn(job.ScriptPath)
 	if err != nil {
 		fmt.Printf("Failed to spawn job %s: %v\n", job.Name, err)
-		nextRun := e.calcNextRun(job, isDue, startTime)
+		nextRun := e.calcNextRun(job, trigger.advancesNextRun(), startTime)
 		e.repo.Finalize(job.ID, -1, nextRun, db.JobStatusFailed)
-		e.appendLog(logPath, fmt.Sprintf("\nERROR: Failed to spawn: %v\n", err))
+		writeLog(fmt.Sprintf("\nERROR: Failed to spawn: %v\n", err))
 		return
 	}
 
@@ -76,7 +137,7 @@ func (e *Executor) ExecuteJob(job *db.Job, truncateLog bool) {
 		case <-time.After(time.Duration(timeoutSec) * time.Second):
 			fmt.Printf("Job %s timed out after %ds. Killing tree...\n", job.Name, timeoutSec)
 			process.KillTree(proc.PID, false)
-			e.appendLog(logPath, fmt.Sprintf("\n[TIMEOUT] Job exceeded %ds and was killed.\n", timeoutSec))
+			writeLog(fmt.Sprintf("\n[TIMEOUT] Job exceeded %ds and was killed.\n", timeoutSec))
 		case <-timeoutDone:
 		}
 	}()
@@ -85,9 +146,9 @@ func (e *Executor) ExecuteJob(job *db.Job, truncateLog bool) {
 	stdout, stderr, err := proc.OutputPipes()
 	if err != nil {
 		fmt.Printf("Failed to get pipes for %s: %v\n", job.Name, err)
-		e.appendLog(logPath, fmt.Sprintf("\nERROR: Failed to get output pipes: %v\n", err))
+		writeLog(fmt.Sprintf("\nERROR: Failed to get output pipes: %v\n", err))
 		close(timeoutDone)
-		nextRun := e.calcNextRun(job, isDue, startTime)
+		nextRun := e.calcNextRun(job, trigger.advancesNextRun(), startTime)
 		e.repo.Finalize(job.ID, -1, nextRun, db.JobStatusFailed)
 		return
 	}
@@ -103,12 +164,12 @@ func (e *Executor) ExecuteJob(job *db.Job, truncateLog bool) {
 		if writtenBytes > maxRunBytes {
 			if !truncatedPrinted {
 				truncatedPrinted = true
-				e.appendLog(logPath, "\n[LOG TRUNCATED: Exceeded 10MB limit]\n")
+				writeLog("\n[LOG TRUNCATED: Exceeded 10MB limit]\n")
 			}
 			return
 		}
 		writtenBytes += int64(len(text))
-		e.appendLog(logPath, text)
+		writeLog(text)
 	}
 
 	// Stream stdout and stderr concurrently
@@ -133,7 +194,7 @@ func (e *Executor) ExecuteJob(job *db.Job, truncateLog bool) {
 	}
 
 	// Finalize
-	nextRun := e.calcNextRun(job, isDue, startTime)
+	nextRun := e.calcNextRun(job, trigger.advancesNextRun(), startTime)
 	duration := time.Since(startTime).Seconds()
 	e.repo.Finalize(job.ID, exitCode, nextRun, db.JobStatusIdle)
 
@@ -141,7 +202,7 @@ func (e *Executor) ExecuteJob(job *db.Job, truncateLog bool) {
 	if exitCode != 0 {
 		status = "Failed"
 	}
-	e.appendLog(logPath, fmt.Sprintf(
+	writeLog(fmt.Sprintf(
 		"--------------------------------------------------------------------------------\n"+
 			"[RUN FINISHED] | Status: %s | Duration: %.1fs | Exit Code: %d | Time: %s\n"+
 			"--------------------------------------------------------------------------------\n",
@@ -176,17 +237,8 @@ func (e *Executor) streamToLog(r io.Reader, write func(string)) {
 	}
 }
 
-func (e *Executor) appendLog(path, content string) {
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	f.WriteString(content)
-}
-
-func (e *Executor) calcNextRun(job *db.Job, isDue bool, baseTime time.Time) int64 {
-	if !isDue {
+func (e *Executor) calcNextRun(job *db.Job, advance bool, baseTime time.Time) int64 {
+	if !advance {
 		return job.NextRunTime
 	}
 	next, err := CalculateNextRun(job.Cron, baseTime)
