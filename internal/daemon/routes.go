@@ -14,6 +14,7 @@ import (
 	"github.com/DropGuard/pyrunner/internal/db"
 	apperrors "github.com/DropGuard/pyrunner/internal/errors"
 	"github.com/DropGuard/pyrunner/internal/process"
+	"github.com/DropGuard/pyrunner/internal/version"
 )
 
 type Server struct {
@@ -26,19 +27,25 @@ type Server struct {
 		GetDefaultTimeout() int
 	}
 	startTime time.Time
+	// shutdown runs the daemon's teardown when the HTTP /daemon/shutdown
+	// endpoint is hit. It is injected at construction (not a package-level
+	// var) so tests can pass their own teardown and run in parallel without
+	// clobbering each other.
+	shutdown func()
 }
 
 func NewServer(repo *db.Repository, scheduler *CronJobManager, executor *Executor, cfg interface {
 	GetDaemonIpcPath() string
 	GetLogsDir() string
 	GetDefaultTimeout() int
-}) *Server {
+}, shutdown func()) *Server {
 	return &Server{
 		repo:      repo,
 		scheduler: scheduler,
 		executor:  executor,
 		config:    cfg,
 		startTime: time.Now(),
+		shutdown:  shutdown,
 	}
 }
 
@@ -70,6 +77,15 @@ func (s *Server) Router() http.Handler {
 	return r
 }
 
+// SetShutdown wires the teardown closure into the Server so the
+// /daemon/shutdown endpoint can trigger it. It is separate from NewServer so
+// callers can construct the Server (and its Router) before building the
+// teardown, which typically needs to close the HTTP server that wraps the
+// Router.
+func (s *Server) SetShutdown(fn func()) {
+	s.shutdown = fn
+}
+
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -87,7 +103,7 @@ func writeErr(w http.ResponseWriter, status int, code apperrors.ErrorCode, msg s
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeOK(w, map[string]interface{}{
 		"status":  "ok",
-		"version": "0.2.0",
+		"version": version.String(),
 		"uptime":  time.Since(s.startTime).Seconds(),
 	})
 }
@@ -160,7 +176,7 @@ func (s *Server) handleAddJob(w http.ResponseWriter, r *http.Request) {
 
 	job, _ := s.repo.GetByName(req.Name)
 	s.scheduler.Schedule(req.Name, req.Cron, func() {
-		s.executor.ExecuteJob(job, false)
+		s.executor.ExecuteJob(job, TriggerScheduled)
 	})
 
 	writeJSON(w, 201, apperrors.OK(map[string]interface{}{
@@ -220,7 +236,7 @@ func (s *Server) handleEditJob(w http.ResponseWriter, r *http.Request) {
 
 	updated, _ := s.repo.GetByName(name)
 	s.scheduler.Schedule(updated.Name, updated.Cron, func() {
-		s.executor.ExecuteJob(updated, false)
+		s.executor.ExecuteJob(updated, TriggerScheduled)
 	})
 
 	writeOK(w, updated)
@@ -260,7 +276,7 @@ func (s *Server) handleRunJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Fire and forget
-	go s.executor.ExecuteJob(updated, true)
+	go s.executor.ExecuteJob(updated, TriggerManual)
 
 	writeOK(w, map[string]string{"triggered": name})
 }
@@ -361,13 +377,11 @@ func extractLastBlock(content string) string {
 	return content
 }
 
-var ShutdownFn func()
-
 func (s *Server) handleShutdown(w http.ResponseWriter, r *http.Request) {
 	writeOK(w, map[string]bool{"shutting_down": true})
-	if fn := ShutdownFn; fn != nil {
-		// Capture fn at schedule time: ShutdownFn is a mutable package var and
-		// may have been replaced by the time the goroutine runs.
+	if fn := s.shutdown; fn != nil {
+		// Run the teardown on a goroutine after responding, so the HTTP client
+		// receives the acknowledgement before the listener closes.
 		go func() {
 			time.Sleep(100 * time.Millisecond)
 			fn()

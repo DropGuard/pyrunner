@@ -30,11 +30,7 @@ func newFromEnv(getenv func(string) string) *Config {
 
 	dbPath := getenv("PYRUNNER_DB_PATH")
 	if dbPath == "" {
-		if getenv("NODE_ENV") == "test" {
-			dbPath = ":memory:"
-		} else {
-			dbPath = filepath.Join(baseDir, "jobs.sqlite")
-		}
+		dbPath = filepath.Join(baseDir, "jobs.sqlite")
 	}
 
 	return &Config{
