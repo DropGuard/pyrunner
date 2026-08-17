@@ -143,15 +143,7 @@ func (e *Executor) ExecuteJob(job *db.Job, trigger TriggerType) {
 	}()
 
 	// Stream output
-	stdout, stderr, err := proc.OutputPipes()
-	if err != nil {
-		fmt.Printf("Failed to get pipes for %s: %v\n", job.Name, err)
-		writeLog(fmt.Sprintf("\nERROR: Failed to get output pipes: %v\n", err))
-		close(timeoutDone)
-		nextRun := e.calcNextRun(job, trigger.advancesNextRun(), startTime)
-		e.repo.Finalize(job.ID, -1, nextRun, db.JobStatusFailed)
-		return
-	}
+	stdout, stderr := proc.Stdout, proc.Stderr
 
 	var mu sync.Mutex
 	var writtenBytes int64

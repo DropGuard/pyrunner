@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"syscall"
 
 	"github.com/spf13/cobra"
 )
@@ -49,6 +50,8 @@ func startDaemonBinary(cfg2 interface{ EnsureEnv() error }) error {
 
 	if runtime.GOOS == "windows" {
 		cmd.SysProcAttr = getHideWindowAttr()
+	} else {
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	}
 
 	if err := cmd.Start(); err != nil {

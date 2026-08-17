@@ -2,6 +2,7 @@ package process
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +13,8 @@ type Job struct {
 	Cmd     *exec.Cmd
 	PID     int
 	JobName string
+	Stdout  io.ReadCloser
+	Stderr  io.ReadCloser
 }
 
 // Spawn starts a Python script via `uv run` and returns the running process.
@@ -28,31 +31,28 @@ func Spawn(scriptPath string) (*Job, error) {
 	)
 
 	setHideWindow(cmd)
+	setProcessGroup(cmd)
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("stdout pipe: %w", err)
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, fmt.Errorf("stderr pipe: %w", err)
+	}
 
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start process: %w", err)
 	}
 
-	setProcessGroup(cmd)
-
 	return &Job{
 		Cmd:     cmd,
 		PID:     cmd.Process.Pid,
 		JobName: filepath.Base(scriptPath),
+		Stdout:  stdout,
+		Stderr:  stderr,
 	}, nil
-}
-
-// OutputPipes returns stdout and stderr as readable pipes.
-func (j *Job) OutputPipes() (stdout, stderr interface{ Read([]byte) (int, error) }, err error) {
-	outPipe, err := j.Cmd.StdoutPipe()
-	if err != nil {
-		return nil, nil, fmt.Errorf("stdout pipe: %w", err)
-	}
-	errPipe, err := j.Cmd.StderrPipe()
-	if err != nil {
-		return nil, nil, fmt.Errorf("stderr pipe: %w", err)
-	}
-	return outPipe, errPipe, nil
 }
 
 // Wait blocks until the process exits and returns the exit code.
