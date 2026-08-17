@@ -25,7 +25,11 @@ func newStartCmd() *cobra.Command {
 	return cmd
 }
 
-// startDaemonBinary finds and spawns the pyrunnerd binary as a background process.
+// startDaemonBinary finds and spawns the pyrunnerd binary as a background
+// process. If a daemon is already running (Health responds), it leaves it
+// alone and reports success — callers that need a fresh daemon (e.g. install
+// after stopping the old one) should ensure the old daemon has exited before
+// calling this.
 func startDaemonBinary(cfg2 interface{ EnsureEnv() error }) error {
 	if err := cfg2.EnsureEnv(); err != nil {
 		return fmt.Errorf("create directories: %w", err)
@@ -36,7 +40,7 @@ func startDaemonBinary(cfg2 interface{ EnsureEnv() error }) error {
 		return err
 	}
 
-	// Check if daemon is already running by trying to connect
+	// Check if daemon is already running by trying to connect.
 	testClient := client
 	if _, err := testClient.Health(); err == nil {
 		printInfo("Daemon is already running")

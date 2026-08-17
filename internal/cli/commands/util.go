@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -86,10 +87,57 @@ func printInfo(msg string) {
 	fmt.Println(infoStyle.Render("[INFO] " + msg))
 }
 
+// copyFile atomically copies src to dst. It writes to a temp file in the
+// same directory then renames it into place, so the destination is never left
+// half-written if the process is interrupted. On Windows, an existing dst
+// that is locked (e.g. a running binary) makes the rename fail; callers that
+// replace a running binary should retry after the old process exits.
 func copyFile(src, dst string) error {
 	data, err := os.ReadFile(src)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(dst, data, 0o755)
+
+	// Rename trick: move the existing file out of the way first.
+	// This prevents ERROR_SHARING_VIOLATION on Windows if the binary is running.
+	oldPath := dst + ".old"
+	_ = os.Remove(oldPath)
+	_ = os.Rename(dst, oldPath)
+
+	tmp := dst + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o755); err != nil {
+		return err
+	}
+	
+	// Rename is atomic on the same filesystem.
+	if err := os.Rename(tmp, dst); err != nil {
+		_ = os.Rename(oldPath, dst) // rollback
+		return err
+	}
+	
+	// Clean up if possible (succeeds instantly on Unix, fails silently on Windows if locked)
+	_ = os.Remove(oldPath)
+	return nil
+}
+
+// withRetry runs op repeatedly until it succeeds, sleeping between attempts,
+// and gives up after timeout. It is used to replace a running binary on
+// Windows: the old process holds the exe open until it exits, so the
+// replace/delete only succeeds once the lock is released. Rather than guess
+// how long to sleep, we poll the actual operation — the lock is gone exactly
+// when the operation succeeds. Returns the last error if timeout is reached.
+func withRetry(op func() error, timeout, interval time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for {
+		if err := op(); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+		if time.Now().After(deadline) {
+			return lastErr
+		}
+		time.Sleep(interval)
+	}
 }

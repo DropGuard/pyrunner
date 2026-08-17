@@ -21,16 +21,22 @@ func newUninstallCmd() *cobra.Command {
 			if err := client.Shutdown(); err != nil {
 				printWarn("Daemon not running or not responding")
 			}
-			time.Sleep(500 * time.Millisecond)
 
 			// Disable auto-start
 			if err := unregisterAutoStart(); err != nil {
 				printWarn(fmt.Sprintf("Could not disable auto-start: %v", err))
 			}
 
-			// Cleanup binaries
+			// Remove the CLI symlink from PATH (best-effort)
+			unregisterFromPath(filepath.Join(cfg.BinDir, "pyrunner"+filepath.Ext(os.Args[0])))
+
+			// Cleanup binaries. Retry so a still-running daemon (which holds the
+			// exe open on Windows) has a chance to exit and release the lock;
+			// report an error rather than silently leaving binaries behind.
 			printInfo("Removing binaries...")
-			os.RemoveAll(cfg.BinDir)
+			if err := withRetry(func() error { return os.RemoveAll(cfg.BinDir) }, 5*time.Second, 200*time.Millisecond); err != nil {
+				return fmt.Errorf("remove binaries: %w", err)
+			}
 
 			if wipe {
 				printInfo("Removing all data...")
