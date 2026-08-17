@@ -1,6 +1,10 @@
 package commands
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+)
 
 func TestIsRemoteSource(t *testing.T) {
 	cases := []struct {
@@ -27,9 +31,7 @@ func TestIsRemoteSource(t *testing.T) {
 		{"https://", true}, // prefix match; empty name guarded in add.go
 	}
 	for _, c := range cases {
-		if got := IsRemoteSource(c.arg); got != c.want {
-			t.Errorf("IsRemoteSource(%q) = %v, want %v", c.arg, got, c.want)
-		}
+		assert.Equal(t, c.want, IsRemoteSource(c.arg), "IsRemoteSource(%q)", c.arg)
 	}
 }
 
@@ -47,8 +49,6 @@ func TestRepoNameFromURL(t *testing.T) {
 		{"git@github.com:", ""}, // no repo segment
 	}
 	for _, c := range cases {
-		if got := RepoNameFromURL(c.arg); got != c.want {
-			t.Errorf("RepoNameFromURL(%q) = %q, want %q", c.arg, got, c.want)
-		}
+		assert.Equal(t, c.want, RepoNameFromURL(c.arg), "RepoNameFromURL(%q)", c.arg)
 	}
 }

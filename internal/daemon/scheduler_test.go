@@ -3,6 +3,9 @@ package daemon
 import (
 	"sync/atomic"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestScheduleInvalidExpr(t *testing.T) {
@@ -10,24 +13,20 @@ func TestScheduleInvalidExpr(t *testing.T) {
 	defer m.StopAll()
 
 	err := m.Schedule("bad", "not a cron", func() {})
-	if err == nil {
-		t.Error("expected error for invalid cron expression")
-	}
+	assert.Error(t, err, "expected error for invalid cron expression")
 }
 
 func TestUnschedule(t *testing.T) {
 	m := NewCronJobManager()
 	defer m.StopAll()
 
-	m.Schedule("removeme", "* * * * *", func() {})
-	if _, ok := m.activeJobs["removeme"]; !ok {
-		t.Fatal("job should exist")
-	}
+	require.NoError(t, m.Schedule("removeme", "* * * * *", func() {}))
+	_, ok := m.activeJobs["removeme"]
+	require.True(t, ok, "job should exist")
 
 	m.Unschedule("removeme")
-	if _, ok := m.activeJobs["removeme"]; ok {
-		t.Error("job should have been removed")
-	}
+	_, ok = m.activeJobs["removeme"]
+	assert.False(t, ok, "job should have been removed")
 }
 
 func TestRescheduleReplacesExisting(t *testing.T) {
@@ -35,23 +34,19 @@ func TestRescheduleReplacesExisting(t *testing.T) {
 	defer m.StopAll()
 
 	var count1, count2 atomic.Int32
-	m.Schedule("replace", "* * * * *", func() { count1.Add(1) })
-	m.Schedule("replace", "* * * * *", func() { count2.Add(1) })
+	require.NoError(t, m.Schedule("replace", "* * * * *", func() { count1.Add(1) }))
+	require.NoError(t, m.Schedule("replace", "* * * * *", func() { count2.Add(1) }))
 
-	if len(m.activeJobs) != 1 {
-		t.Errorf("expected 1 active job, got %d", len(m.activeJobs))
-	}
+	assert.Len(t, m.activeJobs, 1, "reschedule should replace, not duplicate")
 }
 
 func TestStopAll(t *testing.T) {
 	m := NewCronJobManager()
 
-	m.Schedule("a", "* * * * *", func() {})
-	m.Schedule("b", "* * * * *", func() {})
+	require.NoError(t, m.Schedule("a", "* * * * *", func() {}))
+	require.NoError(t, m.Schedule("b", "* * * * *", func() {}))
 
 	m.StopAll()
 
-	if len(m.activeJobs) != 0 {
-		t.Errorf("expected 0 active jobs, got %d", len(m.activeJobs))
-	}
+	assert.Len(t, m.activeJobs, 0, "all active jobs should be stopped")
 }

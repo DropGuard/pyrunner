@@ -1,13 +1,14 @@
 package daemon_test
 
 import (
-	"fmt"
 	"net"
 	"net/http"
 	"os"
-	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/DropGuard/pyrunner/internal/cli"
 	"github.com/DropGuard/pyrunner/internal/config"
@@ -16,130 +17,80 @@ import (
 )
 
 func TestDaemonIntegration(t *testing.T) {
-	// Create temp directory for test
-	tmpDir := filepath.Join(os.TempDir(), fmt.Sprintf("pyrunner-test-%d", time.Now().UnixNano()))
-	os.MkdirAll(tmpDir, 0o755)
-	defer os.RemoveAll(tmpDir)
+	tmpDir := t.TempDir()
 
 	cfg := config.ForTest(tmpDir)
-	cfg.EnsureEnv()
+	require.NoError(t, cfg.EnsureEnv())
 
 	database, err := db.Open(cfg.DBPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
+	t.Cleanup(func() { database.Close() })
 
 	repo := db.NewRepository(database)
-	repo.CleanupStaleJobs()
+	require.NoError(t, repo.CleanupStaleJobs())
 
 	scheduler := daemon.NewCronJobManager()
 	executor := daemon.NewExecutor(repo, cfg)
 
-	server := daemon.NewServer(repo, scheduler, executor, cfg)
-	router := server.Router()
-
 	os.Remove(cfg.DaemonIpcPath)
-
 	listener, err := net.Listen("unix", cfg.DaemonIpcPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
-	httpServer := &http.Server{Handler: router}
-
-	daemon.ShutdownFn = func() {
+	httpServer := &http.Server{Handler: nil}
+	shutdown := func() {
 		scheduler.StopAll()
 		httpServer.Close()
-		database.Close()
 		os.Remove(cfg.DaemonIpcPath)
 	}
+	server := daemon.NewServer(repo, scheduler, executor, cfg, shutdown)
+	httpServer.Handler = server.Router()
 
 	go httpServer.Serve(listener)
-	defer func() {
-		if daemon.ShutdownFn != nil {
-			daemon.ShutdownFn()
-		}
-	}()
+	t.Cleanup(shutdown)
 
-	// Wait for daemon to be ready
+	// Wait for daemon to be ready.
 	testClient := cli.NewClient(cfg.DaemonIpcPath)
-	ready := false
-	for range 50 {
+	assert.Eventually(t, func() bool {
 		health, err := testClient.Health()
-		if err == nil && health["status"] == "ok" {
-			ready = true
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	if !ready {
-		t.Fatal("Daemon not ready after 5s")
-	}
+		return err == nil && health["status"] == "ok"
+	}, 5*time.Second, 50*time.Millisecond, "daemon should become ready")
 
 	// Test health
 	health, err := testClient.Health()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if health["status"] != "ok" {
-		t.Errorf("health status = %v", health["status"])
-	}
+	require.NoError(t, err)
+	assert.Equal(t, "ok", health["status"], "health status")
 
 	// Test daemon status
 	status, err := testClient.DaemonStatus()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := status["pid"]; !ok {
-		t.Error("daemon status missing pid")
-	}
+	require.NoError(t, err)
+	assert.Contains(t, status, "pid", "daemon status should report pid")
 
 	// Test list jobs (empty)
 	jobs, err := testClient.ListJobs()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(jobs) != 0 {
-		t.Errorf("expected 0 jobs, got %d", len(jobs))
-	}
+	require.NoError(t, err)
+	assert.Empty(t, jobs, "should start with no jobs")
 
 	// Test add job
 	result, err := testClient.AddJob("test-job", "/tmp/test.py", "0 12 * * *")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result["name"] != "test-job" {
-		t.Errorf("name = %v", result["name"])
-	}
+	require.NoError(t, err)
+	assert.Equal(t, "test-job", result["name"])
 
 	// Test list jobs (one)
 	jobs, err = testClient.ListJobs()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(jobs) != 1 {
-		t.Errorf("expected 1 job, got %d", len(jobs))
-	}
+	require.NoError(t, err)
+	assert.Len(t, jobs, 1, "should have one job after add")
 
 	// Test get job logs
-	logs, err := testClient.GetJobLogs("test-job", 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = logs
+	_, err = testClient.GetJobLogs("test-job", 0)
+	require.NoError(t, err)
 
 	// Test remove job
-	if err := testClient.RemoveJob("test-job"); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, testClient.RemoveJob("test-job"))
 
-	jobs, _ = testClient.ListJobs()
-	if len(jobs) != 0 {
-		t.Errorf("expected 0 jobs after delete, got %d", len(jobs))
-	}
+	jobs, err = testClient.ListJobs()
+	require.NoError(t, err)
+	assert.Empty(t, jobs, "should be empty after delete")
 
 	// Test shutdown
-	if err := testClient.Shutdown(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, testClient.Shutdown())
 }

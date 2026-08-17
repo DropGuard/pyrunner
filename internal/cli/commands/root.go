@@ -8,6 +8,7 @@ import (
 
 	"github.com/DropGuard/pyrunner/internal/cli"
 	"github.com/DropGuard/pyrunner/internal/config"
+	"github.com/DropGuard/pyrunner/internal/version"
 )
 
 var (
@@ -52,7 +53,7 @@ func init() {
 	cfg = config.New()
 	client = cli.NewClient(cfg.DaemonIpcPath)
 
-	rootCmd.Version = "0.2.0"
+	rootCmd.Version = version.String()
 
 	// Aliases handled by individual commands
 	rootCmd.AddCommand(

@@ -2,6 +2,8 @@ package process
 
 import (
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestDecoderMultiByteChunked(t *testing.T) {
@@ -11,12 +13,8 @@ func TestDecoderMultiByteChunked(t *testing.T) {
 	part1 := d.Decode(chars[:2]) // incomplete first char
 	part2 := d.Decode(chars[2:]) // rest
 
-	if part1 != "" {
-		t.Errorf("part1 should be empty, got %q", part1)
-	}
-	if part2 != "你好" {
-		t.Errorf("part2 = %q, want '你好'", part2)
-	}
+	assert.Empty(t, part1, "part1 should be empty")
+	assert.Equal(t, "你好", part2)
 }
 
 func TestDecoderMultipleChunks(t *testing.T) {
@@ -28,21 +26,15 @@ func TestDecoderMultipleChunks(t *testing.T) {
 	r1 := d.Decode(append(hello, chars[:3]...))
 	r2 := d.Decode(append(chars[3:], world...))
 
-	if r1 != "Hello 你" {
-		t.Errorf("r1 = %q", r1)
-	}
-	if r2 != "好 World" {
-		t.Errorf("r2 = %q", r2)
-	}
+	assert.Equal(t, "Hello 你", r1)
+	assert.Equal(t, "好 World", r2)
 }
 
 func TestDecoderFlush(t *testing.T) {
 	d := &SmartDecoder{}
 	d.Decode([]byte{0xE4, 0xBD}) // incomplete "你", saved as remainder
 	result := d.Flush()
-	if result == "" {
-		t.Error("expected replacement characters on flush")
-	}
+	assert.NotEmpty(t, result, "expected replacement characters on flush")
 }
 
 func TestDecoderFullCJK(t *testing.T) {
@@ -57,7 +49,5 @@ func TestDecoderFullCJK(t *testing.T) {
 	}
 	got += d.Flush()
 
-	if got != input {
-		t.Errorf("got %q, want %q", got, input)
-	}
+	assert.Equal(t, input, got)
 }

@@ -2,11 +2,35 @@
   "name": "@dropguard/pyrunner",
   "version": "0.2.0",
   "description": "A lightweight, cross-platform Python script scheduler",
-  "bin": {
-    "pyrunner": "./bin.js"
+  "author": "DropGuard <rememberluo@hotmail.com>",
+  "homepage": "https://github.com/DropGuard/pyrunner#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DropGuard/pyrunner.git"
   },
-  "keywords": ["python", "scheduler", "cron", "daemon"],
+  "bin": {
+    "pyrunner": "bin.js"
+  },
+  "keywords": [
+    "python",
+    "scheduler",
+    "cron",
+    "daemon",
+    "uv"
+  ],
   "license": "MIT",
-  "os": ["linux", "darwin", "win32"],
-  "cpu": ["x64", "arm64"]
+  "os": [
+    "linux",
+    "darwin",
+    "win32"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ],
+  "files": [
+    "bin.js",
+    "README.md",
+    "LICENSE"
+  ]
 }

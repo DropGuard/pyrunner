@@ -3,7 +3,6 @@
 package daemon_test
 
 import (
-	"fmt"
 	"net"
 	"net/http"
 	"os"
@@ -11,6 +10,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/DropGuard/pyrunner/internal/cli"
 	"github.com/DropGuard/pyrunner/internal/config"
@@ -24,88 +26,69 @@ import (
 // the test needs no uv install. This would have caught the historical
 // StdoutPipe-after-Start bug: every job used to die at pipe setup.
 func TestDaemonRunToCompletion(t *testing.T) {
-	tmpDir := filepath.Join(os.TempDir(), fmt.Sprintf("pyrunner-run-test-%d", time.Now().UnixNano()))
-	os.MkdirAll(tmpDir, 0o755)
-	defer os.RemoveAll(tmpDir)
+	tmpDir := t.TempDir()
 
 	// Copy the shim into a temp dir and chmod it, so the executable bit never
 	// depends on how the testdata file was checked into git.
 	fakeBin := filepath.Join(tmpDir, "fakebin")
-	os.MkdirAll(fakeBin, 0o755)
+	require.NoError(t, os.MkdirAll(fakeBin, 0o755))
 	shim, err := os.ReadFile(filepath.Join("testdata", "fakebin", "uv"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(fakeBin, "uv"), shim, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(fakeBin, "uv"), shim, 0o755))
 	oldPath := os.Getenv("PATH")
 	os.Setenv("PATH", fakeBin+string(os.PathListSeparator)+oldPath)
 	defer os.Setenv("PATH", oldPath)
 
 	script := filepath.Join(tmpDir, "hello.py")
-	if err := os.WriteFile(script, []byte("print('integration ok')\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.WriteFile(script, []byte("print('integration ok')\n"), 0o644))
 
 	cfg := config.ForTest(tmpDir)
-	cfg.EnsureEnv()
+	require.NoError(t, cfg.EnsureEnv())
 
 	database, err := db.Open(cfg.DBPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
+	t.Cleanup(func() { database.Close() })
 
 	repo := db.NewRepository(database)
-	repo.CleanupStaleJobs()
+	require.NoError(t, repo.CleanupStaleJobs())
 
 	scheduler := daemon.NewCronJobManager()
 	executor := daemon.NewExecutor(repo, cfg)
 
-	server := daemon.NewServer(repo, scheduler, executor, cfg)
 	os.Remove(cfg.DaemonIpcPath)
 	listener, err := net.Listen("unix", cfg.DaemonIpcPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	httpServer := &http.Server{Handler: server.Router()}
+	require.NoError(t, err)
+	httpServer := &http.Server{Handler: nil}
 
-	daemon.ShutdownFn = func() {
+	shutdown := func() {
 		scheduler.StopAll()
 		httpServer.Close()
-		database.Close()
 		os.Remove(cfg.DaemonIpcPath)
 	}
+	server := daemon.NewServer(repo, scheduler, executor, cfg, shutdown)
+	httpServer.Handler = server.Router()
+
 	go httpServer.Serve(listener)
-	defer daemon.ShutdownFn()
+	t.Cleanup(shutdown)
 
 	testClient := cli.NewClient(cfg.DaemonIpcPath)
-	ready := false
-	for range 50 {
+	assert.Eventually(t, func() bool {
 		health, err := testClient.Health()
-		if err == nil && health["status"] == "ok" {
-			ready = true
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	if !ready {
-		t.Fatal("Daemon not ready after 5s")
-	}
+		return err == nil && health["status"] == "ok"
+	}, 5*time.Second, 50*time.Millisecond, "daemon should become ready")
 
-	if _, err := testClient.AddJob("run-job", script, "0 12 * * *"); err != nil {
-		t.Fatal(err)
-	}
-	if err := testClient.RunJob("run-job"); err != nil {
-		t.Fatal(err)
-	}
+	_, err = testClient.AddJob("run-job", script, "0 12 * * *")
+	require.NoError(t, err)
+	require.NoError(t, testClient.RunJob("run-job"))
 
 	// Poll until the job finishes, then assert exit code and log content.
-	deadline := time.Now().Add(10 * time.Second)
-	for {
+	// EventuallyWithT retries the closure until it no longer calls
+	// collect.Error (i.e. the job is no longer running and finished cleanly).
+	assert.EventuallyWithT(t, func(collect *assert.CollectT) {
 		jobs, err := testClient.ListJobs()
 		if err != nil {
-			t.Fatal(err)
+			collect.Errorf("list jobs: %v", err)
+			return
 		}
 		for _, j := range jobs {
 			if j["name"] != "run-job" {
@@ -113,26 +96,26 @@ func TestDaemonRunToCompletion(t *testing.T) {
 			}
 			status, _ := j["status"].(string)
 			if status == "running" {
-				break
+				collect.Errorf("job still running")
+				return
 			}
 			if ec, _ := j["last_exit_code"].(float64); int(ec) != 0 {
-				t.Fatalf("job exited with code %v", j["last_exit_code"])
+				collect.Errorf("job exited with code %v", j["last_exit_code"])
+				return
 			}
 			logs, err := testClient.GetJobLogs("run-job", 0)
 			if err != nil {
-				t.Fatal(err)
+				collect.Errorf("get logs: %v", err)
+				return
 			}
 			if !strings.Contains(logs, "integration ok") {
-				t.Errorf("logs missing script output: %q", logs)
+				collect.Errorf("logs missing script output: %q", logs)
 			}
 			if !strings.Contains(logs, "RUN FINISHED") {
-				t.Errorf("logs missing RUN FINISHED marker: %q", logs)
+				collect.Errorf("logs missing RUN FINISHED marker: %q", logs)
 			}
 			return
 		}
-		if time.Now().After(deadline) {
-			t.Fatal("job did not finish within 10s")
-		}
-		time.Sleep(200 * time.Millisecond)
-	}
+		collect.Errorf("run-job not found in job list")
+	}, 10*time.Second, 200*time.Millisecond, "job should finish with exit 0 and expected log output")
 }

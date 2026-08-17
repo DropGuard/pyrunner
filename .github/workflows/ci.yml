@@ -65,13 +65,17 @@ jobs:
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
-        run: make build-cli BINDIR=.
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          make build-cli BINDIR=. VERSION=$TAG
 
       - name: Build Daemon
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
-        run: make build-daemon BINDIR=.
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          make build-daemon BINDIR=. VERSION=$TAG
 
       - name: Package
         shell: bash
@@ -105,7 +109,10 @@ jobs:
 
       - name: Publish to npm
         run: |
-          cd npm
+          # Bundle the Go-version README and LICENSE so the npm page doesn't
+          # carry stale TypeScript-era descriptions.
+          cp ../README.md ./README.md
+          cp ../LICENSE ./LICENSE
           TAG=${GITHUB_REF#refs/tags/v}
           npm version $TAG --no-git-tag-version
           npm publish --access public
