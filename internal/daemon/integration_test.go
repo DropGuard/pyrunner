@@ -1,11 +1,9 @@
 package daemon_test
 
 import (
-	"fmt"
 	"net"
 	"net/http"
 	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -16,11 +14,7 @@ import (
 )
 
 func TestDaemonIntegration(t *testing.T) {
-	// Create temp directory for test
-	tmpDir := filepath.Join(os.TempDir(), fmt.Sprintf("pyrunner-test-%d", time.Now().UnixNano()))
-	os.MkdirAll(tmpDir, 0o755)
-	defer os.RemoveAll(tmpDir)
-
+	tmpDir := t.TempDir()
 	cfg := config.ForTest(tmpDir)
 	cfg.EnsureEnv()
 
@@ -32,12 +26,13 @@ func TestDaemonIntegration(t *testing.T) {
 	repo := db.NewRepository(database)
 	repo.CleanupStaleJobs()
 
-	scheduler := daemon.NewCronJobManager()
 	executor := daemon.NewExecutor(repo, cfg)
+	scheduler := daemon.NewScheduler(repo, executor, 30*time.Second)
+	scheduler.Start()
 
 	httpServer := &http.Server{}
 	shutdownFn := func() {
-		scheduler.StopAll()
+		scheduler.Stop()
 		if httpServer != nil {
 			httpServer.Close()
 		}
@@ -45,7 +40,7 @@ func TestDaemonIntegration(t *testing.T) {
 		os.Remove(cfg.DaemonIpcPath)
 	}
 
-	server := daemon.NewServer(repo, scheduler, executor, cfg, shutdownFn)
+	server := daemon.NewServer(repo, executor, cfg, shutdownFn)
 	httpServer = &http.Server{Handler: server.Router()}
 	defer shutdownFn()
 

@@ -19,7 +19,6 @@ import (
 
 type Server struct {
 	repo      *db.Repository
-	scheduler *CronJobManager
 	executor  *Executor
 	config    interface {
 		GetDaemonIpcPath() string
@@ -34,14 +33,13 @@ type Server struct {
 	shutdown func()
 }
 
-func NewServer(repo *db.Repository, scheduler *CronJobManager, executor *Executor, cfg interface {
+func NewServer(repo *db.Repository, executor *Executor, cfg interface {
 	GetDaemonIpcPath() string
 	GetLogsDir() string
 	GetDefaultTimeout() int
 }, shutdown func()) *Server {
 	return &Server{
 		repo:      repo,
-		scheduler: scheduler,
 		executor:  executor,
 		config:    cfg,
 		startTime: time.Now(),
@@ -174,11 +172,6 @@ func (s *Server) handleAddJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	job, _ := s.repo.GetByName(req.Name)
-	s.scheduler.Schedule(req.Name, req.Cron, func() {
-		s.executor.ExecuteJob(job, TriggerScheduled)
-	})
-
 	writeJSON(w, 201, apperrors.OK(map[string]interface{}{
 		"name":         req.Name,
 		"next_run_time": nextRun.UnixMilli(),
@@ -235,16 +228,11 @@ func (s *Server) handleEditJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	updated, _ := s.repo.GetByName(name)
-	s.scheduler.Schedule(updated.Name, updated.Cron, func() {
-		s.executor.ExecuteJob(updated, TriggerScheduled)
-	})
-
 	writeOK(w, updated)
 }
 
 func (s *Server) handleDeleteJob(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
-	s.scheduler.Unschedule(name)
 	deleted, err := s.repo.Delete(name)
 	if err != nil {
 		writeErr(w, 500, apperrors.ErrValidation, err.Error())

@@ -36,38 +36,6 @@ func killRunningJobs(repo *db.Repository) {
 	}
 }
 
-// jobRunner abstracts the execution of a single job, so tests can inject a
-// fake and assert the catch-up selection without spawning real processes.
-type jobRunner interface {
-	ExecuteJob(job *db.Job, trigger daemon.TriggerType)
-}
-
-// catchUpMissedJobs runs every job whose next_run_time is already in the past
-// (and not currently running), compensating for missed slots. This is the
-// daemon's catch-up behavior. Each compensated job is executed once; its
-// next_run_time is then advanced to a future occurrence by ExecuteJob.
-//
-// It returns the number of jobs it started running, so callers/tests can
-// assert the compensation actually happened.
-func catchUpMissedJobs(repo *db.Repository, runner jobRunner, now time.Time) int {
-	jobs, err := repo.GetAll()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to load jobs: %v\n", err)
-		return 0
-	}
-
-	count := 0
-	nowMS := now.UnixMilli()
-	for _, job := range jobs {
-		if job.NextRunTime <= nowMS && job.Status != db.JobStatusRunning {
-			job := job // capture
-			go runner.ExecuteJob(&job, daemon.TriggerCatchUp)
-			count++
-		}
-	}
-	return count
-}
-
 func main() {
 	os.Exit(run())
 }
@@ -106,25 +74,15 @@ func run() int {
 		fmt.Fprintf(os.Stderr, "Failed to cleanup stale jobs: %v\n", err)
 	}
 
-	scheduler := daemon.NewCronJobManager()
 	executor := daemon.NewExecutor(repo, cfg)
+	scheduler := daemon.NewScheduler(repo, executor, 30*time.Second)
+	scheduler.Start()
+	defer scheduler.Stop()
 
-	// Load and schedule existing jobs
 	jobs, err := repo.GetAll()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to load jobs: %v\n", err)
 		return 1
-	}
-
-	// Catch up missed jobs (compensation for time the daemon was down).
-	catchUpMissedJobs(repo, executor, time.Now())
-
-	for _, job := range jobs {
-		job := job // capture
-		// Schedule all jobs
-		scheduler.Schedule(job.Name, job.Cron, func() {
-			executor.ExecuteJob(&job, daemon.TriggerScheduled)
-		})
 	}
 
 	// Start HTTP server on the Unix socket (clean stale socket file first).
@@ -147,15 +105,15 @@ func run() int {
 	// Build the Router first, wrap it in an http.Server, then define the
 	// teardown closure (which closes that http.Server) and wire it in via
 	// SetShutdown so the /daemon/shutdown endpoint can trigger it.
-	server := daemon.NewServer(repo, scheduler, executor, cfg, nil)
+	server := daemon.NewServer(repo, executor, cfg, nil)
 	router := server.Router()
 	httpServer := &http.Server{Handler: router}
 
 	shutdown := func() {
 		fmt.Println("Shutting down...")
-		// Stop cron scheduling first, then kill any in-flight jobs so no
+		// Stop heartbeat scheduler first, then kill any in-flight jobs so no
 		// child process is left orphaned when the daemon exits.
-		scheduler.StopAll()
+		scheduler.Stop()
 		killRunningJobs(repo)
 		httpServer.Shutdown(context.Background())
 		close(done)
