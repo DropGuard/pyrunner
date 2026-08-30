@@ -5,5 +5,5 @@ package commands
 import "syscall"
 
 func getHideWindowAttr() *syscall.SysProcAttr {
-	return nil
+	return &syscall.SysProcAttr{Setsid: true}
 }

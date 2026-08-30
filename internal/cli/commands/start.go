@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 
 	"github.com/spf13/cobra"
 )
@@ -50,10 +49,7 @@ func startDaemonBinary(cfg2 interface{ EnsureEnv() error }) error {
 	printInfo(fmt.Sprintf("Starting daemon: %s", daemonPath))
 
 	cmd := exec.Command(daemonPath)
-
-	if runtime.GOOS == "windows" {
-		cmd.SysProcAttr = getHideWindowAttr()
-	}
+	cmd.SysProcAttr = getHideWindowAttr()
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start daemon: %w", err)
