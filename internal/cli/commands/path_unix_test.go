@@ -41,10 +41,14 @@ func TestRegisterOnPathSymlink(t *testing.T) {
 	require.NoError(t, err, "registerOnPath should create a symlink in a writable PATH dir")
 	assert.Equal(t, filepath.Join(pathDir, "pyrunner"), link)
 
-	// The symlink should resolve to binPath.
+	// The symlink should resolve to binPath. Resolve both sides through any
+	// symlinks in their parents (notably /var -> /private/var on macOS) so the
+	// comparison is independent of which form os.TempDir returns.
 	resolved, err := filepath.EvalSymlinks(link)
 	require.NoError(t, err)
-	assert.Equal(t, binPath, resolved)
+	want, err := filepath.EvalSymlinks(binPath)
+	require.NoError(t, err)
+	assert.Equal(t, want, resolved)
 
 	// Uninstall removes it.
 	unregisterFromPath(binPath)
