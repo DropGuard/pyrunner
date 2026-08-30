@@ -25,9 +25,11 @@ func unregisterAutoStart() error {
 // root (usually registry.CURRENT_USER) and keyPath are parameters so tests
 // can target a throwaway registry key instead of the real Run key.
 func writeAutoStart(root registry.Key, keyPath, valueName, command string) error {
-	k, err := registry.OpenKey(root, keyPath, registry.SET_VALUE)
+	// Use CreateKey (not OpenKey) so the key is created if it doesn't exist.
+	// OpenKey would fail with "file not found" for any fresh subkey.
+	k, _, err := registry.CreateKey(root, keyPath, registry.SET_VALUE)
 	if err != nil {
-		return fmt.Errorf("open registry key: %w", err)
+		return fmt.Errorf("create registry key: %w", err)
 	}
 	defer k.Close()
 	return k.SetStringValue(valueName, command)
