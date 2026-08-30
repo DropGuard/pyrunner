@@ -64,6 +64,13 @@ func registerOnPath(binPath string) (string, error) {
 // unregisterFromPath removes the symlink created by registerOnPath.
 func unregisterFromPath(binPath string) {
 	target := filepath.Base(binPath)
+	// Resolve binPath through any intermediate symlinks (e.g. /var -> /private/var
+	// on macOS) so it can be compared against symlink targets in the same form
+	// registerOnPath stored them.
+	wantTarget, err := filepath.EvalSymlinks(binPath)
+	if err != nil {
+		wantTarget = binPath
+	}
 	pathDirs := filepath.SplitList(os.Getenv("PATH"))
 	for _, d := range pathDirs {
 		if strings.Contains(d, "~") {
@@ -73,7 +80,7 @@ func unregisterFromPath(binPath string) {
 		}
 		linkPath := filepath.Join(d, target)
 		if fi, err := os.Lstat(linkPath); err == nil && fi.Mode()&os.ModeSymlink != 0 {
-			if resolved, err := filepath.EvalSymlinks(linkPath); err == nil && resolved == binPath {
+			if resolved, err := filepath.EvalSymlinks(linkPath); err == nil && resolved == wantTarget {
 				os.Remove(linkPath)
 			}
 		}
