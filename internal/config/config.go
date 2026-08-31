@@ -61,8 +61,16 @@ func ForTest(baseDir string) *Config {
 	}
 }
 
+// EnsureEnv creates the per-user runtime directories if they don't exist.
+// The PyRunner root is created with 0700 because the daemon's HTTP control
+// API is unauthenticated — anyone with read access to the socket can list,
+// edit, run, and kill jobs. Subdirectories are 0755 so editors and the
+// `uv` tool can walk through logs/ and repos/ without needing 0700.
 func (c *Config) EnsureEnv() error {
-	for _, dir := range []string{c.PyrunnerDir, c.BinDir, c.LogsDir, c.ReposDir} {
+	if err := os.MkdirAll(c.PyrunnerDir, 0o700); err != nil {
+		return err
+	}
+	for _, dir := range []string{c.BinDir, c.LogsDir, c.ReposDir} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err
 		}

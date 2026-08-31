@@ -2,6 +2,7 @@ package db
 
 import (
 	"fmt"
+	"os"
 
 	_ "github.com/glebarez/sqlite"
 	"github.com/jmoiron/sqlx"
@@ -45,6 +46,16 @@ func Open(path string) (*sqlx.DB, error) {
 
 	// Migration: add pid column if missing (for existing databases)
 	db.Exec("ALTER TABLE jobs ADD COLUMN pid INTEGER")
+
+	// Tighten DB file permissions to owner-only. The DB holds task names,
+	// script paths, and run history; loosening to world-readable would leak
+	// user script locations. Ignore failures: chmod on an existing file
+	// the daemon didn't create may legitimately be read-only.
+	if path != ":memory:" {
+		_ = os.Chmod(path, 0o600)
+		_ = os.Chmod(path+"-wal", 0o600)
+		_ = os.Chmod(path+"-shm", 0o600)
+	}
 
 	return db, nil
 }
