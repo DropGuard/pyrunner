@@ -111,6 +111,7 @@ jobs:
 
       - name: Publish to npm
         run: |
+          cd npm
           # Bundle the Go-version README and LICENSE so the npm page doesn't
           # carry stale TypeScript-era descriptions.
           cp ../README.md ./README.md
