@@ -15,7 +15,7 @@ You point it at a script (or a Git repo), pick a schedule, and forget about it. 
 - **Lightweight** — Go-compiled static binaries, no Go/Node/Python runtime required to install.
 - **Powered by [`uv`](https://docs.astral.sh/uv/)** — Python dependency management and script execution out of the box.
 - **Cron scheduling** — standard 5-field expressions via [`robfig/cron`](https://github.com/robfig/cron).
-- **System service (user-level)** — runs as the logged-in user; writes only to `~/.pyrunner`. Auto-start on login: Linux (XDG `.desktop`), Windows (Registry `HKCU\…\Run`). On macOS, register a Login Item pointing at `pyrunner start --hidden` (no launchd plist is written by `install` yet).
+- **System service (user-level)** — runs as the logged-in user; writes only to `~/.pyrunner`. Auto-start on login: Linux (XDG `.desktop`), Windows (Registry `HKCU\…\Run`), macOS (LaunchAgent `~/Library/LaunchAgents/com.dropguard.pyrunner.plist`).
 - **Process management** — graceful SIGTERM → SIGKILL, process-tree cleanup, per-job timeout.
 - **Strict UTF-8** — `PYTHONUTF8=1` and `PYTHONIOENCODING=utf-8` are always set on children.
 - **Tight permissions** — `~/.pyrunner` is `0700` and SQLite files are `0600` (multi-user safe).
