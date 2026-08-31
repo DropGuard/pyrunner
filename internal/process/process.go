@@ -41,13 +41,17 @@ func Spawn(scriptPath string) (*Job, error) {
 		return nil, fmt.Errorf("stderr pipe: %w", err)
 	}
 
+	// Process-group and hide-window attributes must be applied before Start.
+	// Setpgid in particular only takes effect when the SysProcAttr is set on
+	// the parent side at fork time; setting it after Start leaves the child
+	// in our process group, and KillTree(-pid, ...) cannot reach the whole
+	// spawned Python tree.
+	setProcessGroup(cmd)
 	setHideWindow(cmd)
 
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start process: %w", err)
 	}
-
-	setProcessGroup(cmd)
 
 	return &Job{
 		Cmd:        cmd,
