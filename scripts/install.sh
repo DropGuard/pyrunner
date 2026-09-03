@@ -8,31 +8,58 @@ TEMP_EXE="$TEMP_DIR/pyrunner"
 
 echo "🚀 开始安装/更新 PyRunner..."
 
-# 1. 自动识别平台
+# 1. 自动识别平台。仓库产物按 GOOS-GOARCH 命名(amd64/x64 与 arm64)，
+#    与 .github/workflows/ci.yml 的发布矩阵保持一致。
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m)
 
-if [ "$OS" = "darwin" ]; then
-    TARGET_PLATFORM=$([ "$ARCH" = "arm64" ] && echo "darwin-arm64" || echo "darwin-x64")
-elif [ "$OS" = "linux" ]; then
-    TARGET_PLATFORM="linux-x64"
-else
-    echo "❌ 暂不支持的操作系统: $OS"
+case "$OS-$ARCH" in
+    linux-x86_64)  TARGET_PLATFORM="linux-amd64" ;;
+    linux-amd64)   TARGET_PLATFORM="linux-amd64" ;;
+    linux-aarch64) TARGET_PLATFORM="linux-arm64" ;;
+    linux-arm64)   TARGET_PLATFORM="linux-arm64" ;;
+    darwin-arm64)  TARGET_PLATFORM="darwin-arm64" ;;
+    *)
+        echo "❌ 暂不支持的系统/架构: $OS/$ARCH"
+        exit 1
+        ;;
+esac
+
+# 2. 获取最新 Release 下载链接。用 python3 解析 GitHub API 返回的 JSON
+#    (grep/sed 解析脆弱：资产顺序变化或字段含转义就会静默失败)。
+RELEASE_JSON=$(curl -s "https://api.github.com/repos/$REPO/releases/latest")
+
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "❌ 需要 python3 解析 Release 信息；请安装 python3，或从 https://github.com/$REPO/releases/latest 手动下载 ${TARGET_PLATFORM} 资产"
     exit 1
 fi
 
-# 2. 获取最新 Release 下载链接
-RELEASE_JSON=$(curl -s "https://api.github.com/repos/$REPO/releases/latest")
-DOWNLOAD_URL=$(echo "$RELEASE_JSON" | grep -o 'https://github.com/[^"]*' | grep "${TARGET_PLATFORM}" | head -n 1)
+if ! OUT=$(RELEASE_JSON="$RELEASE_JSON" python3 - "$TARGET_PLATFORM" <<'PY'
+import json, os, re, sys
 
-if [ -z "$DOWNLOAD_URL" ]; then
+plat = sys.argv[1]
+release = json.loads(os.environ["RELEASE_JSON"])
+pattern = re.compile(r"^pyrunner-v[^ ]*-" + re.escape(plat) + r"\.tar\.gz$")
+for asset in release.get("assets", []):
+    if pattern.match(asset.get("name", "")):
+        print(asset["name"])
+        print(asset["browser_download_url"])
+        sys.exit(0)
+sys.exit(1)
+PY
+); then
     echo "❌ 未能在最新 Release 中找到平台为 $TARGET_PLATFORM 的构建产物"
     exit 1
 fi
 
-# 3. 下载到临时目录
-echo "正在下载二进制文件..."
-curl -L -o "$TEMP_EXE" "$DOWNLOAD_URL"
+ARCHIVE_NAME=$(printf '%s\n' "$OUT" | sed -n '1p')
+DOWNLOAD_URL=$(printf '%s\n' "$OUT" | sed -n '2p')
+
+# 3. 下载并解压到临时目录
+echo "正在下载 $ARCHIVE_NAME ..."
+TEMP_ARCHIVE="$TEMP_DIR/$ARCHIVE_NAME"
+curl -fL -o "$TEMP_ARCHIVE" "$DOWNLOAD_URL"
+tar xzf "$TEMP_ARCHIVE" -C "$TEMP_DIR"
 chmod +x "$TEMP_EXE"
 
 # 4. 配置环境变量 PATH
@@ -45,7 +72,7 @@ if [[ ":$PATH:" != *":$TARGET_DIR:"* ]]; then
     export PATH="$PATH:$TARGET_DIR"
 fi
 
-# 5. 执行临时二进制完成自更新及启动
+# 5. 执行临时二进制完成安装及启动
 echo "正在安装后台服务..."
 "$TEMP_EXE" install
 
