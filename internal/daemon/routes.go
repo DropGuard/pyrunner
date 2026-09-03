@@ -150,6 +150,16 @@ func (s *Server) handleAddJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Task names become log file names and repo directory names verbatim, so
+	// they are validated structurally here (the authoritative write path):
+	// path separators, traversal segments, whitespace and Windows reserved
+	// device names are rejected before a job can be persisted with a name that
+	// would later escape ~/.pyrunner/logs or ~/.pyrunner/repos.
+	if err := db.ValidateTaskName(req.Name); err != nil {
+		writeErr(w, 400, apperrors.ErrValidation, err.Error())
+		return
+	}
+
 	absPath, err := filepath.Abs(req.ScriptPath)
 	if err != nil {
 		writeErr(w, 400, apperrors.ErrValidation, "Invalid script path")
