@@ -20,6 +20,14 @@ function getPlatform() {
   const platform = os.platform();
   const arch = os.arch();
 
+  // Intel Macs are not supported: release assets only cover Apple Silicon
+  // (darwin-arm64). Fail early with a clear message instead of attempting to
+  // download a darwin-amd64 archive that is never published.
+  if (platform === "darwin" && arch !== "arm64") {
+    console.error("PyRunner only supports Apple Silicon Macs (arm64). Intel Macs (x64) are not supported.");
+    process.exit(1);
+  }
+
   const platformMap = { win32: "windows", linux: "linux", darwin: "darwin" };
   const archMap = { x64: "amd64", arm64: "arm64" };
 

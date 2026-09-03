@@ -8,31 +8,46 @@ TEMP_EXE="$TEMP_DIR/pyrunner"
 
 echo "🚀 开始安装/更新 PyRunner..."
 
-# 1. 自动识别平台
+# 1. 自动识别平台。仓库产物按 GOOS-GOARCH 命名(amd64/x64 与 arm64)，
+#    与 .github/workflows/ci.yml 的发布矩阵保持一致。
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m)
 
-if [ "$OS" = "darwin" ]; then
-    TARGET_PLATFORM=$([ "$ARCH" = "arm64" ] && echo "darwin-arm64" || echo "darwin-x64")
-elif [ "$OS" = "linux" ]; then
-    TARGET_PLATFORM="linux-x64"
-else
-    echo "❌ 暂不支持的操作系统: $OS"
-    exit 1
-fi
+case "$OS-$ARCH" in
+    linux-x86_64)  TARGET_PLATFORM="linux-amd64" ;;
+    linux-amd64)   TARGET_PLATFORM="linux-amd64" ;;
+    linux-aarch64) TARGET_PLATFORM="linux-arm64" ;;
+    linux-arm64)   TARGET_PLATFORM="linux-arm64" ;;
+    darwin-arm64)  TARGET_PLATFORM="darwin-arm64" ;;
+    *)
+        echo "❌ 暂不支持的系统/架构: $OS/$ARCH"
+        exit 1
+        ;;
+esac
 
 # 2. 获取最新 Release 下载链接
 RELEASE_JSON=$(curl -s "https://api.github.com/repos/$REPO/releases/latest")
-DOWNLOAD_URL=$(echo "$RELEASE_JSON" | grep -o 'https://github.com/[^"]*' | grep "${TARGET_PLATFORM}" | head -n 1)
+ARCHIVE_NAME=$(echo "$RELEASE_JSON" \
+    | grep -o '"name": *"[^"]*"' | sed 's/.*"name": *"//; s/"$//' \
+    | grep "^pyrunner-v.*-${TARGET_PLATFORM}\.tar\.gz$" | head -n 1)
 
-if [ -z "$DOWNLOAD_URL" ]; then
+if [ -z "$ARCHIVE_NAME" ]; then
     echo "❌ 未能在最新 Release 中找到平台为 $TARGET_PLATFORM 的构建产物"
     exit 1
 fi
 
-# 3. 下载到临时目录
-echo "正在下载二进制文件..."
-curl -L -o "$TEMP_EXE" "$DOWNLOAD_URL"
+# 从 api.github.com 的重定向中解析出实际资产下载 URL
+DOWNLOAD_URL=$(echo "$RELEASE_JSON" \
+    | grep -o "https://[^\" ]*${ARCHIVE_NAME}" | head -n 1)
+if [ -z "$DOWNLOAD_URL" ]; then
+    DOWNLOAD_URL="https://github.com/$REPO/releases/latest/download/$ARCHIVE_NAME"
+fi
+
+# 3. 下载并解压到临时目录
+echo "正在下载 $ARCHIVE_NAME ..."
+TEMP_ARCHIVE="$TEMP_DIR/$ARCHIVE_NAME"
+curl -fL -o "$TEMP_ARCHIVE" "$DOWNLOAD_URL"
+tar xzf "$TEMP_ARCHIVE" -C "$TEMP_DIR"
 chmod +x "$TEMP_EXE"
 
 # 4. 配置环境变量 PATH
@@ -45,7 +60,7 @@ if [[ ":$PATH:" != *":$TARGET_DIR:"* ]]; then
     export PATH="$PATH:$TARGET_DIR"
 fi
 
-# 5. 执行临时二进制完成自更新及启动
+# 5. 执行临时二进制完成安装及启动
 echo "正在安装后台服务..."
 "$TEMP_EXE" install
 
