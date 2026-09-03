@@ -105,8 +105,19 @@ func (e *Executor) ExecuteJob(job *db.Job, trigger TriggerType) {
 
 	// Rotate the log if it has grown past 5 MiB so the file never runs away.
 	// Newer content goes to <name>.log, the previous content to <name>.log.old.
+	// The previous .old is removed first so rotation is atomic-ish even on
+	// Windows, where os.Rename refuses to overwrite an existing destination.
+	// Any rotation failure is surfaced to stderr (the run still proceeds —
+	// a non-rotated oversized log is preferable to a failed run, and the
+	// per-run 10 MiB write cap still bounds growth).
 	if info, err := os.Stat(logPath); err == nil && info.Size() > 5*1024*1024 {
-		os.Rename(logPath, logPath+".old")
+		oldPath := logPath + ".old"
+		if err := os.Remove(oldPath); err != nil && !os.IsNotExist(err) {
+			fmt.Printf("Failed to remove old log %s: %v\n", oldPath, err)
+		}
+		if err := os.Rename(logPath, oldPath); err != nil {
+			fmt.Printf("Failed to rotate log %s: %v\n", logPath, err)
+		}
 	}
 
 	// Open the log once and reuse the handle for every write in this run,
