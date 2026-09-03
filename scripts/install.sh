@@ -25,23 +25,35 @@ case "$OS-$ARCH" in
         ;;
 esac
 
-# 2. 获取最新 Release 下载链接
+# 2. 获取最新 Release 下载链接。用 python3 解析 GitHub API 返回的 JSON
+#    (grep/sed 解析脆弱：资产顺序变化或字段含转义就会静默失败)。
 RELEASE_JSON=$(curl -s "https://api.github.com/repos/$REPO/releases/latest")
-ARCHIVE_NAME=$(echo "$RELEASE_JSON" \
-    | grep -o '"name": *"[^"]*"' | sed 's/.*"name": *"//; s/"$//' \
-    | grep "^pyrunner-v.*-${TARGET_PLATFORM}\.tar\.gz$" | head -n 1)
 
-if [ -z "$ARCHIVE_NAME" ]; then
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "❌ 需要 python3 解析 Release 信息；请安装 python3，或从 https://github.com/$REPO/releases/latest 手动下载 ${TARGET_PLATFORM} 资产"
+    exit 1
+fi
+
+if ! OUT=$(RELEASE_JSON="$RELEASE_JSON" python3 - "$TARGET_PLATFORM" <<'PY'
+import json, os, re, sys
+
+plat = sys.argv[1]
+release = json.loads(os.environ["RELEASE_JSON"])
+pattern = re.compile(r"^pyrunner-v[^ ]*-" + re.escape(plat) + r"\.tar\.gz$")
+for asset in release.get("assets", []):
+    if pattern.match(asset.get("name", "")):
+        print(asset["name"])
+        print(asset["browser_download_url"])
+        sys.exit(0)
+sys.exit(1)
+PY
+); then
     echo "❌ 未能在最新 Release 中找到平台为 $TARGET_PLATFORM 的构建产物"
     exit 1
 fi
 
-# 从 api.github.com 的重定向中解析出实际资产下载 URL
-DOWNLOAD_URL=$(echo "$RELEASE_JSON" \
-    | grep -o "https://[^\" ]*${ARCHIVE_NAME}" | head -n 1)
-if [ -z "$DOWNLOAD_URL" ]; then
-    DOWNLOAD_URL="https://github.com/$REPO/releases/latest/download/$ARCHIVE_NAME"
-fi
+ARCHIVE_NAME=$(printf '%s\n' "$OUT" | sed -n '1p')
+DOWNLOAD_URL=$(printf '%s\n' "$OUT" | sed -n '2p')
 
 # 3. 下载并解压到临时目录
 echo "正在下载 $ARCHIVE_NAME ..."
