@@ -8,16 +8,6 @@ import (
 )
 
 func TestValidateTaskNameAccepts(t *testing.T) {
-	valid := []string{
-		"a",
-		"task1",
-		"my_task",
-		"task.name",
-		"TASK-1",
-		"MyTask.2024",
-		"dropguard/moxing_checkin", // no — wait, this must NOT be valid
-	}
-	_ = valid
 	cases := []string{
 		"a", "task1", "my_task", "task.name", "TASK-1", "MyTask.2024",
 		"a1", "period.mid.dot", "dash-sep", "under_score",
