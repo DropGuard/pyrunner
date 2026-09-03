@@ -43,12 +43,13 @@ func newUninstallCmd() *cobra.Command {
 				os.RemoveAll(cfg.PyrunnerDir)
 				printSuccess("PyRunner fully uninstalled (all data removed)")
 			} else {
-				// Only remove bin, keep logs and db
-				keepFiles := []string{"jobs.sqlite", "daemon.sock"}
-				for _, f := range keepFiles {
-					os.Remove(filepath.Join(cfg.PyrunnerDir, f))
-				}
-				printSuccess("PyRunner uninstalled (logs preserved in " + cfg.LogsDir + ")")
+				// Keep all user state — jobs.sqlite, logs/, repos/ — so a later
+				// `pyrunner install` can pick the scheduled tasks right back up
+				// (README FAQ: without -w, state is preserved for a reinstall).
+				// Only the runtime socket is removed: it is a stale artifact and
+				// the daemon recreates it on next start.
+				os.Remove(filepath.Join(cfg.PyrunnerDir, "daemon.sock"))
+				printSuccess("PyRunner uninstalled (task database, logs and repos preserved)")
 			}
 			return nil
 		},
