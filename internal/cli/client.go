@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"time"
 
 	apperrors "github.com/DropGuard/pyrunner/internal/errors"
 )
@@ -18,14 +19,27 @@ type Client struct {
 	ipcPath    string
 }
 
+const (
+	// dialTimeout bounds the Unix socket connect. A stale socket file whose
+	// daemon died makes connect fail immediately; a live-but-saturated socket
+	// would otherwise hang the CLI forever.
+	dialTimeout = 3 * time.Second
+	// clientTimeout bounds the whole control-plane request. Normal operations
+	// (list/add/edit/run/kill/logs) are sub-second on a healthy daemon; the
+	// ceiling exists so a wedged daemon (SQLite lock, hung handler) surfaces
+	// as a clear error instead of a frozen terminal.
+	clientTimeout = 15 * time.Second
+)
+
 func NewClient(ipcPath string) *Client {
 	transport := &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return net.Dial("unix", ipcPath)
+			d := net.Dialer{Timeout: dialTimeout}
+			return d.DialContext(ctx, "unix", ipcPath)
 		},
 	}
 	return &Client{
-		httpClient: &http.Client{Transport: transport},
+		httpClient: &http.Client{Transport: transport, Timeout: clientTimeout},
 		baseURL:    "http://localhost", // dummy host, real connection goes through unix socket
 		ipcPath:    ipcPath,
 	}
