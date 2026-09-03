@@ -75,10 +75,32 @@ func (e *Executor) ExecuteJob(job *db.Job, trigger TriggerType) {
 	// (daemon scheduler, catch-up, API create/edit, manual run) funnels
 	// through ExecuteJob, so stamping here guarantees last_run_time is kept
 	// in sync and status is set to running while the process is in flight.
-	// MarkAsRunning is idempotent (WHERE status != running): the manual
-	// handler may have already stamped it, in which case the update is a no-op.
+	//
+	// MarkAsRunning is an atomic conditional UPDATE (WHERE status != running),
+	// so it doubles as the duplicate-execution guard: if the scheduler fires at
+	// the same moment a manual `pyrunner run` is in flight, exactly one caller
+	// wins the UPDATE and the loser returns here instead of spawning a second
+	// process that would race on the same log file.
 	if updated, err := e.repo.MarkAsRunning(job.ID); err == nil && updated != nil {
 		job.LastRunTime = updated.LastRunTime
+	} else {
+		if err != nil {
+			fmt.Printf("[%s] Job %s: failed to mark as running, skipping: %v\n", runType, job.Name, err)
+		} else {
+			fmt.Printf("[%s] Job %s is already running; skipping duplicate trigger\n", runType, job.Name)
+		}
+		// A scheduled or catch-up trigger that loses the race must still
+		// consume its slot: leave next_run_time in the past and a daemon
+		// restart mid-run would see a past-due job and start a second process
+		// on top of the one that is actually running. The winner's Finalize
+		// will then set the same next future occurrence, making this update
+		// idempotent.
+		if trigger.advancesNextRun() {
+			if err := e.repo.AdvanceNextRun(job.ID, e.calcNextRun(job, true, startTime)); err != nil {
+				fmt.Printf("[%s] Job %s: failed to advance next run after duplicate skip: %v\n", runType, job.Name, err)
+			}
+		}
+		return
 	}
 
 	// Rotate the log if it has grown past 5 MiB so the file never runs away.

@@ -186,7 +186,7 @@ Everything is under `~/.pyrunner/`: `bin/`, `logs/`, `repos/`, `daemon.sock`, `j
 
 ```bash
 make build          # build both binaries into ./bin
-make test           # go test ./internal/... -v -count=1
+make test           # go test ./... -v -count=1 (includes cmd/ packages)
 make vet            # go vet ./...
 make install        # build + register as a system service
 ```

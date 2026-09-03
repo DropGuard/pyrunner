@@ -44,8 +44,19 @@ func Open(path string) (*sqlx.DB, error) {
 		return nil, fmt.Errorf("create schema: %w", err)
 	}
 
-	// Migration: add pid column if missing (for existing databases)
-	db.Exec("ALTER TABLE jobs ADD COLUMN pid INTEGER")
+	// Migration: add pid column if missing (for existing databases).
+	// sqlite has no ADD COLUMN IF NOT EXISTS, so probe sqlite_master first —
+	// blindly running ALTER on a schema that already has the column raises
+	// "duplicate column name" and would fail startup.
+	var pidCol int
+	if err := db.QueryRow(
+		"SELECT COUNT(*) FROM pragma_table_info('jobs') WHERE name = 'pid'",
+	).Scan(&pidCol); err == nil && pidCol == 0 {
+		if _, err := db.Exec("ALTER TABLE jobs ADD COLUMN pid INTEGER"); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("migrate pid column: %w", err)
+		}
+	}
 
 	// Tighten DB file permissions to owner-only. The DB holds task names,
 	// script paths, and run history; loosening to world-readable would leak

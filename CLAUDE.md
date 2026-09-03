@@ -16,7 +16,7 @@ The CLI talks to the daemon over a Unix Domain Socket using HTTP (go-chi/chi). J
 make build          # build both binaries into ./bin
 make build-cli      # build only pyrunner
 make build-daemon   # build only pyrunnerd
-make test           # go test ./internal/... -v -count=1
+make test           # go test ./... -v -count=1 (includes cmd/ packages)
 make vet            # go vet ./...
 make install        # build + register as system service
 make clean          # rm -rf ./bin

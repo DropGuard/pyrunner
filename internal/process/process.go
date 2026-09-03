@@ -6,7 +6,49 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 )
+
+// Test seams for resolveUVPath. Kept as package vars so unit tests can stub
+// PATH lookup and the home directory without touching the real environment.
+var (
+	uvLookPath = exec.LookPath
+	uvHomeDir  = os.UserHomeDir
+	uvGetenv   = os.Getenv
+)
+
+// resolveUVPath returns the absolute path of the uv binary to spawn.
+//
+// The daemon is often launched from a login agent (.desktop / LaunchAgent /
+// Run key) whose PATH is minimal and may not include ~/.local/bin (the
+// default install location for `curl ... | sh` uv installs and pipx).
+// exec.Command("uv", ...) would then silently degrade the next time the
+// parent re-resolves PATH; resolving once here and passing the absolute
+// path makes the child independent of the daemon's PATH.
+func resolveUVPath() (string, error) {
+	// 1. Explicit override wins over everything.
+	if p := uvGetenv("PYRUNNER_UV"); p != "" {
+		return p, nil
+	}
+	// 2. Ask the PATH for uv.
+	if p, err := uvLookPath("uv"); err == nil {
+		return p, nil
+	}
+	// 3. Fall back to the per-user bin dir (uv's default install location).
+	home, err := uvHomeDir()
+	if err == nil && home != "" {
+		candidates := []string{filepath.Join(home, ".local", "bin", "uv")}
+		if runtime.GOOS == "windows" {
+			candidates = []string{filepath.Join(home, ".local", "bin", "uv.exe")}
+		}
+		for _, c := range candidates {
+			if fi, err := os.Stat(c); err == nil && !fi.IsDir() {
+				return c, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("uv not found: install from https://docs.astral.sh/uv or set PYRUNNER_UV")
+}
 
 // Job represents a running process for a scheduled job.
 type Job struct {
@@ -23,7 +65,11 @@ func Spawn(scriptPath string) (*Job, error) {
 		return nil, fmt.Errorf("script not found: %s", scriptPath)
 	}
 
-	cmd := exec.Command("uv", "run", scriptPath)
+	uvPath, err := resolveUVPath()
+	if err != nil {
+		return nil, err
+	}
+	cmd := exec.Command(uvPath, "run", scriptPath)
 	cmd.Dir = filepath.Dir(scriptPath)
 	cmd.Env = append(os.Environ(),
 		"PYTHONUTF8=1",
