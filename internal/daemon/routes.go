@@ -180,7 +180,7 @@ func (s *Server) handleAddJob(w http.ResponseWriter, r *http.Request) {
 	})
 
 	writeJSON(w, 201, apperrors.OK(map[string]interface{}{
-		"name":         req.Name,
+		"name":          req.Name,
 		"next_run_time": nextRun.UnixMilli(),
 	}))
 }

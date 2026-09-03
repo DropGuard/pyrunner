@@ -108,13 +108,13 @@ func copyFile(src, dst string) error {
 	if err := os.WriteFile(tmp, data, 0o755); err != nil {
 		return err
 	}
-	
+
 	// Rename is atomic on the same filesystem.
 	if err := os.Rename(tmp, dst); err != nil {
 		_ = os.Rename(oldPath, dst) // rollback
 		return err
 	}
-	
+
 	// Clean up if possible (succeeds instantly on Unix, fails silently on Windows if locked)
 	_ = os.Remove(oldPath)
 	return nil
