@@ -51,6 +51,22 @@ func startDaemonBinary(cfg2 interface{ EnsureEnv() error }) error {
 	cmd := exec.Command(daemonPath)
 	cmd.SysProcAttr = getHideWindowAttr()
 
+	// --hidden means "start without any terminal attachment": the autostart
+	// entries (XDG .desktop, macOS LaunchAgent) pass it so a login shell never
+	// sees daemon log lines. Detach the daemon's stdout/stderr to NUL so
+	// writes after the launching terminal closes cannot error or leak into an
+	// unrelated pty. Without --hidden (interactive `pyrunner start`) the
+	// daemon inherits this terminal so its early startup output is visible.
+	if hidden {
+		devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+		if err != nil {
+			return fmt.Errorf("open %s: %w", os.DevNull, err)
+		}
+		defer devNull.Close()
+		cmd.Stdout = devNull
+		cmd.Stderr = devNull
+	}
+
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start daemon: %w", err)
 	}
