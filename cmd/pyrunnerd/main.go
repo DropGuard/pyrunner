@@ -17,21 +17,54 @@ import (
 	"github.com/DropGuard/pyrunner/internal/singleton"
 )
 
-// killRunningJobs force-kills every job currently marked running, so a
-// daemon shutdown never leaves orphaned child processes. This is the daemon's
-// responsibility: without it, stopping the scheduler would strand Python
-// scripts in the background.
-func killRunningJobs(repo *db.Repository) {
+// processKiller abstracts process-tree termination so tests can assert the
+// startup/shutdown cleanup ordering without spawning real processes.
+type processKiller interface {
+	KillTree(pid int, force bool) error
+}
+
+type realProcessKiller struct{}
+
+func (realProcessKiller) KillTree(pid int, force bool) error {
+	return process.KillTree(pid, force)
+}
+
+// killRunningJobs SIGKILLs every process tree the DB currently marks running.
+// It is called in two places with opposite but complementary intents:
+//
+//   - daemon shutdown: so stopping the scheduler never strands Python scripts
+//     in the background;
+//   - daemon startup (via cleanupStaleRunningJobs): so a crashed daemon's
+//     orphans are reaped before their DB rows are reset. Order matters —
+//     resetting first would let the scheduler re-trigger a job whose previous
+//     process is still alive, and the two runs would race on the same log file.
+//
+// A gracefully-stopped daemon also leaves rows here occasionally: executor
+// goroutines may not have Finalized before the database closed, while the
+// shutdown path already SIGKILLed the processes. KillTree on those yields
+// ESRCH, which is treated as success — nothing left to kill.
+func killRunningJobs(repo *db.Repository, killer processKiller) {
 	jobs, err := repo.GetAll()
 	if err != nil {
 		return
 	}
 	for _, job := range jobs {
 		if job.Status == db.JobStatusRunning && job.PID != nil {
-			if err := process.KillTree(*job.PID, true); err == nil {
+			if err := killer.KillTree(*job.PID, true); err == nil {
 				fmt.Printf("Killed running job %s (pid %d)\n", job.Name, *job.PID)
 			}
 		}
+	}
+}
+
+// cleanupStaleRunningJobs reaps orphaned process trees left by a crashed
+// daemon, then resets their DB rows back to idle. The kill must come first:
+// CleanupStaleJobs overwrites pid with NULL, and once the pid is gone the
+// still-alive child (uv → python) can never be reached again.
+func cleanupStaleRunningJobs(repo *db.Repository, killer processKiller) {
+	killRunningJobs(repo, killer)
+	if err := repo.CleanupStaleJobs(); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to cleanup stale jobs: %v\n", err)
 	}
 }
 
@@ -100,10 +133,10 @@ func run() int {
 
 	repo := db.NewRepository(database)
 
-	// Cleanup stale jobs from previous crash
-	if err := repo.CleanupStaleJobs(); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to cleanup stale jobs: %v\n", err)
-	}
+	// Reap orphaned process trees from a previous crash, then reset their DB
+	// rows to idle. Kill must precede the reset: once CleanupStaleJobs nulls
+	// the pid column, a still-alive child can never be reached again.
+	cleanupStaleRunningJobs(repo, realProcessKiller{})
 
 	scheduler := daemon.NewCronJobManager()
 	executor := daemon.NewExecutor(repo, cfg)
@@ -155,7 +188,7 @@ func run() int {
 		// Stop cron scheduling first, then kill any in-flight jobs so no
 		// child process is left orphaned when the daemon exits.
 		scheduler.StopAll()
-		killRunningJobs(repo)
+		killRunningJobs(repo, realProcessKiller{})
 		httpServer.Close()
 		close(done)
 	}
