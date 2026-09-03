@@ -4,6 +4,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -70,8 +71,12 @@ func TestDaemonIntegration(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, jobs, "should start with no jobs")
 
-	// Test add job
-	result, err := testClient.AddJob("test-job", "/tmp/test.py", "0 12 * * *")
+	// Test add job — with a real script file so the add-time existence check
+	// (added to catch typos early) accepts the job.
+	scriptPath := filepath.Join(tmpDir, "test_job.py")
+	require.NoError(t, os.WriteFile(scriptPath, []byte("print('integration')\n"), 0o644))
+
+	result, err := testClient.AddJob("test-job", scriptPath, "0 12 * * *")
 	require.NoError(t, err)
 	assert.Equal(t, "test-job", result["name"])
 

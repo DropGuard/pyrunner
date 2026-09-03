@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -180,7 +181,7 @@ func (s *Server) handleAddJob(w http.ResponseWriter, r *http.Request) {
 	})
 
 	writeJSON(w, 201, apperrors.OK(map[string]interface{}{
-		"name":         req.Name,
+		"name":          req.Name,
 		"next_run_time": nextRun.UnixMilli(),
 	}))
 }
@@ -264,19 +265,22 @@ func (s *Server) handleRunJob(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, apperrors.ErrJobNotFound, "Task '"+name+"' not found")
 		return
 	}
+
+	// Fast-path reject when the job is already running. The authoritative
+	// duplicate guard lives in ExecuteJob (its MarkAsRunning is an atomic
+	// conditional UPDATE), which also covers races between the scheduler, the
+	// catch-up pass and this endpoint. This pre-check is just so the common
+	// double-run case fails fast with a clear 409.
 	if job.Status == db.JobStatusRunning {
 		writeErr(w, 409, apperrors.ErrAlreadyRunning, "Task '"+name+"' is already running")
 		return
 	}
 
-	updated, err := s.repo.MarkAsRunning(job.ID)
-	if err != nil || updated == nil {
-		writeErr(w, 409, apperrors.ErrAlreadyRunning, "Task '"+name+"' is already running")
-		return
-	}
-
-	// Fire and forget
-	go s.executor.ExecuteJob(updated, TriggerManual)
+	// Fire and forget. Do NOT pre-mark the job as running here: ExecuteJob's
+	// MarkAsRunning is the single atomic gate, and pre-marking would make that
+	// gate reject this very run (the row is already "running" by the time
+	// ExecuteJob checks it), silently swallowing the trigger.
+	go s.executor.ExecuteJob(job, TriggerManual)
 
 	writeOK(w, map[string]string{"triggered": name})
 }
@@ -330,11 +334,10 @@ func (s *Server) handleGetJobLogs(w http.ResponseWriter, r *http.Request) {
 
 	lines := 0
 	if l := r.URL.Query().Get("lines"); l != "" {
-		// parse int
-		for _, c := range l {
-			if c >= '0' && c <= '9' {
-				lines = lines*10 + int(c-'0')
-			}
+		var err error
+		if lines, err = strconv.Atoi(l); err != nil || lines < 0 {
+			writeErr(w, 400, apperrors.ErrValidation, "Invalid lines parameter: "+l)
+			return
 		}
 	}
 

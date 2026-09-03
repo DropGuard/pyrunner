@@ -65,9 +65,15 @@ func (r *Repository) getByID(id int64) (*Job, error) {
 	return &job, nil
 }
 
+// Finalize marks a job idle/failed after a run ends and records its exit
+// status. next_run_time is advanced to max(current, nextRun): a manual run
+// passes its unchanged existing value, while a scheduled/catch-up winner or a
+// duplicate-skip loser passes the next future occurrence. Using MAX means a
+// manual run can never roll back an advance the scheduler already made while
+// that manual run was in flight.
 func (r *Repository) Finalize(id int64, exitCode int, nextRun int64, status JobStatus) error {
 	_, err := r.db.Exec(
-		"UPDATE jobs SET status = ?, last_exit_code = ?, next_run_time = ?, pid = NULL WHERE id = ?",
+		"UPDATE jobs SET status = ?, last_exit_code = ?, next_run_time = MAX(next_run_time, ?), pid = NULL WHERE id = ?",
 		status, exitCode, nextRun, id,
 	)
 	return err
@@ -127,6 +133,22 @@ func (r *Repository) Delete(name string) (bool, error) {
 		return false, err
 	}
 	return rows > 0, nil
+}
+
+// AdvanceNextRun moves a job's next_run_time forward without touching its
+// status. It is used when a scheduled/catch-up trigger loses the
+// duplicate-execution race (the job is already running from an earlier
+// trigger): that slot must still be consumed so next_run_time never points
+// into the past while the job is in flight — otherwise a daemon restart
+// mid-run would see a past-due job and re-run it on top of the live process.
+// The status is left as-is because the running state belongs to the winning
+// execution, which will Finalize (and set the final next_run_time) itself.
+func (r *Repository) AdvanceNextRun(id int64, nextRun int64) error {
+	_, err := r.db.Exec(
+		"UPDATE jobs SET next_run_time = ? WHERE id = ? AND status = ?",
+		nextRun, id, JobStatusRunning,
+	)
+	return err
 }
 
 func (r *Repository) UpdatePID(id int64, pid int) error {

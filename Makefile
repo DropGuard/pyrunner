@@ -21,7 +21,7 @@ install: build
 	$(BINDIR)/pyrunner$(EXT) install
 
 test:
-	go test ./internal/... -v -count=1
+	go test ./... -v -count=1
 
 vet:
 	go vet ./...

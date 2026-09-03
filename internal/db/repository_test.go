@@ -101,6 +101,65 @@ func TestFinalize(t *testing.T) {
 	assert.NotNil(t, updated.LastExitCode)
 	assert.Equal(t, 0, *updated.LastExitCode)
 	assert.Nil(t, updated.PID, "pid should be nil after finalize")
+	assert.Equal(t, nextRun, updated.NextRunTime, "next_run_time should be set by finalize")
+}
+
+// TestFinalizeUsesMaxNextRun verifies Finalize cannot roll next_run_time
+// backwards. Scenario: a manual run captured the job's existing
+// next_run_time, but while it was in flight the scheduler's duplicate-skip
+// advanced the slot to a later time. When the manual run finishes it passes
+// the earlier captured value; the MAX() keeps the newer value.
+func TestFinalizeUsesMaxNextRun(t *testing.T) {
+	repo := setupTestDB(t)
+
+	now := time.Now().UnixMilli()
+	require.NoError(t, repo.Add(AddJobRequest{Name: "maxrun", ScriptPath: "/tmp/m.py", Cron: "* * * * *"}, now))
+
+	jobs, err := repo.GetAll()
+	require.NoError(t, err)
+	require.NotEmpty(t, jobs)
+	job := jobs[0]
+	_, err = repo.MarkAsRunning(job.ID)
+	require.NoError(t, err)
+
+	advanceTo := now + 60000
+	require.NoError(t, repo.AdvanceNextRun(job.ID, advanceTo))
+
+	// Manual run finishes with the stale pre-advance next_run_time; it must
+	// not clobber the already-advanced value.
+	require.NoError(t, repo.Finalize(job.ID, 0, now, JobStatusIdle))
+
+	updated, err := repo.GetByName("maxrun")
+	require.NoError(t, err)
+	assert.Equal(t, advanceTo, updated.NextRunTime, "finalize must not roll back an advanced next_run_time")
+}
+
+func TestAdvanceNextRun(t *testing.T) {
+	repo := setupTestDB(t)
+
+	now := time.Now().UnixMilli()
+	require.NoError(t, repo.Add(AddJobRequest{Name: "adv", ScriptPath: "/tmp/a.py", Cron: "* * * * *"}, now))
+
+	jobs, err := repo.GetAll()
+	require.NoError(t, err)
+	require.NotEmpty(t, jobs)
+	job := jobs[0]
+
+	// Idle job: AdvanceNextRun must not touch it (no running exec owns it).
+	next := now + 60000
+	require.NoError(t, repo.AdvanceNextRun(job.ID, next))
+	unchanged, err := repo.GetByName("adv")
+	require.NoError(t, err)
+	assert.Equal(t, now, unchanged.NextRunTime, "idle job's next_run_time should be untouched")
+
+	// Running job: advance applies and status is preserved.
+	_, err = repo.MarkAsRunning(job.ID)
+	require.NoError(t, err)
+	require.NoError(t, repo.AdvanceNextRun(job.ID, next))
+	advanced, err := repo.GetByName("adv")
+	require.NoError(t, err)
+	assert.Equal(t, next, advanced.NextRunTime, "running job's next_run_time should advance")
+	assert.Equal(t, JobStatusRunning, advanced.Status, "status must be preserved by AdvanceNextRun")
 }
 
 func TestDelete(t *testing.T) {
