@@ -32,6 +32,15 @@ jobs:
       - name: Test
         run: make test
 
+      # Race detector on Linux only: it needs the host C toolchain (works
+      # out of the box on ubuntu runners; Windows runners would need mingw
+      # setup). The scheduler/executor/singleton concurrency is exercised
+      # harder under -race, and this runner also covers the linux-only
+      # process integration tests.
+      - name: Test (race detector)
+        if: runner.os == 'Linux'
+        run: go test ./... -race -count=1
+
       - name: Vet
         run: make vet
 
