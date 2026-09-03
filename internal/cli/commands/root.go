@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -8,6 +9,7 @@ import (
 
 	"github.com/DropGuard/pyrunner/internal/cli"
 	"github.com/DropGuard/pyrunner/internal/config"
+	apperrors "github.com/DropGuard/pyrunner/internal/errors"
 	"github.com/DropGuard/pyrunner/internal/version"
 )
 
@@ -72,7 +74,27 @@ func init() {
 }
 
 func Execute() {
+	// SilenceErrors/SilenceUsage: cobra prints a giant usage block on every
+	// error by default. Output is controlled here so each failure class gets
+	// a terse, actionable message instead.
+	rootCmd.SilenceErrors = true
+	rootCmd.SilenceUsage = true
 	if err := rootCmd.Execute(); err != nil {
+		var apiErr *apperrors.APIError
+		var offlineErr *apperrors.DaemonOfflineError
+		switch {
+		case errors.As(err, &apiErr) && apiErr.Code == apperrors.ErrInternal:
+			// Server-side failure — not the user's input. The raw code adds
+			// nothing here; say plainly that the daemon broke and what it
+			// reported, so the user can decide whether to file an issue.
+			fmt.Fprintf(os.Stderr, "Error: PyRunner daemon reported an internal error: %s\n", apiErr.Message)
+		case errors.As(err, &apiErr):
+			fmt.Fprintf(os.Stderr, "Error: %s\n", apiErr.Error())
+		case errors.As(err, &offlineErr):
+			fmt.Fprintln(os.Stderr, "Error: Scheduler daemon is not running. Start it with 'pyrunner start' or 'pyrunner install'.")
+		default:
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		}
 		os.Exit(1)
 	}
 }

@@ -122,7 +122,7 @@ func (s *Server) handleDaemonStatus(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
 	jobs, err := s.repo.GetAll()
 	if err != nil {
-		writeErr(w, 500, apperrors.ErrValidation, err.Error())
+		writeErr(w, 500, apperrors.ErrInternal, err.Error())
 		return
 	}
 	writeOK(w, jobs)
@@ -171,7 +171,7 @@ func (s *Server) handleAddJob(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, 409, apperrors.ErrNameConflict, "Task '"+req.Name+"' already exists")
 			return
 		}
-		writeErr(w, 500, apperrors.ErrValidation, err.Error())
+		writeErr(w, 500, apperrors.ErrInternal, err.Error())
 		return
 	}
 
@@ -231,7 +231,7 @@ func (s *Server) handleEditJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.repo.Update(name, editReq, nextRun); err != nil {
-		writeErr(w, 500, apperrors.ErrValidation, err.Error())
+		writeErr(w, 500, apperrors.ErrInternal, err.Error())
 		return
 	}
 
@@ -248,7 +248,7 @@ func (s *Server) handleDeleteJob(w http.ResponseWriter, r *http.Request) {
 	s.scheduler.Unschedule(name)
 	deleted, err := s.repo.Delete(name)
 	if err != nil {
-		writeErr(w, 500, apperrors.ErrValidation, err.Error())
+		writeErr(w, 500, apperrors.ErrInternal, err.Error())
 		return
 	}
 	if !deleted {
@@ -298,7 +298,7 @@ func (s *Server) handleKillJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := process.KillTree(*job.PID, true); err != nil {
-		writeErr(w, 500, apperrors.ErrValidation, "Failed to kill task: "+err.Error())
+		writeErr(w, 500, apperrors.ErrInternal, "Failed to kill task: "+err.Error())
 		return
 	}
 	writeOK(w, map[string]string{"killed": name})
