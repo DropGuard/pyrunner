@@ -18,7 +18,6 @@ var ErrScriptNotFound = errors.New("script not found")
 type Job struct {
 	Cmd        *exec.Cmd
 	PID        int
-	JobName    string
 	stdoutPipe io.ReadCloser
 	stderrPipe io.ReadCloser
 }
@@ -90,7 +89,6 @@ func Spawn(scriptPath string) (*Job, error) {
 	return &Job{
 		Cmd:        cmd,
 		PID:        cmd.Process.Pid,
-		JobName:    filepath.Base(scriptPath),
 		stdoutPipe: stdoutR,
 		stderrPipe: stderrR,
 	}, nil

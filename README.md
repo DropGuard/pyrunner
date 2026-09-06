@@ -27,7 +27,9 @@ You point it at a script (or a Git repo), pick a schedule, and forget about it. 
 
 ### One-liner script (recommended)
 
-No Go, Node.js, or Python runtime needed — downloads the native binary for your platform.
+Downloads the native binary for your platform. The bash installer needs
+`python3` to locate the right release asset (plus `curl` and `tar`); the
+PowerShell installer needs nothing beyond Windows itself.
 
 **Windows (PowerShell)**
 ```powershell
