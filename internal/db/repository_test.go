@@ -43,19 +43,6 @@ func TestGetByName(t *testing.T) {
 	assert.Error(t, err, "expected error for nonexistent job")
 }
 
-func TestGetDueJobs(t *testing.T) {
-	repo := setupTestDB(t)
-
-	now := time.Now().UnixMilli()
-	require.NoError(t, repo.Add(AddJobRequest{Name: "past", ScriptPath: "/tmp/p.py", Cron: "* * * * *"}, now-1000))
-	require.NoError(t, repo.Add(AddJobRequest{Name: "future", ScriptPath: "/tmp/f.py", Cron: "* * * * *"}, now+100000))
-
-	due, err := repo.GetDueJobs(now)
-	require.NoError(t, err)
-	require.Len(t, due, 1, "only past job should be due")
-	assert.Equal(t, "past", due[0].Name)
-}
-
 func TestMarkAsRunning(t *testing.T) {
 	repo := setupTestDB(t)
 

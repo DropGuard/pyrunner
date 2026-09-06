@@ -74,6 +74,3 @@ func Open(path string) (*sqlx.DB, error) {
 func OpenMemory() (*sqlx.DB, error) {
 	return Open(":memory:")
 }
-
-// Ensure sqlx is used
-var _ *sqlx.DB

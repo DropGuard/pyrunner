@@ -1,7 +1,5 @@
 package db
 
-import "time"
-
 type JobStatus string
 
 const (
@@ -32,14 +30,4 @@ type AddJobRequest struct {
 type EditJobRequest struct {
 	ScriptPath *string `json:"script_path,omitempty"`
 	Cron       *string `json:"cron,omitempty"`
-}
-
-type DaemonStatus struct {
-	PID      int     `json:"pid"`
-	JobCount int     `json:"job_count"`
-	Uptime   float64 `json:"uptime"`
-}
-
-func nowUnixMilli() int64 {
-	return time.Now().UnixMilli()
 }

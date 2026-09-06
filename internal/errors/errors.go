@@ -6,11 +6,9 @@ type ErrorCode string
 
 const (
 	ErrJobNotFound    ErrorCode = "JOB_NOT_FOUND"
-	ErrDaemonOffline  ErrorCode = "DAEMON_OFFLINE"
 	ErrValidation     ErrorCode = "VALIDATION_ERROR"
 	ErrInternal       ErrorCode = "INTERNAL_ERROR"
 	ErrAlreadyRunning ErrorCode = "ALREADY_RUNNING"
-	ErrScriptNotFound ErrorCode = "SCRIPT_NOT_FOUND"
 	ErrNameConflict   ErrorCode = "NAME_CONFLICT"
 )
 

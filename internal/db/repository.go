@@ -31,12 +31,6 @@ func (r *Repository) GetByName(name string) (*Job, error) {
 	return &job, nil
 }
 
-func (r *Repository) GetDueJobs(now int64) ([]Job, error) {
-	var jobs []Job
-	err := r.db.Select(&jobs, "SELECT "+jobColumns+" FROM jobs WHERE next_run_time <= ? AND status != ?", now, JobStatusRunning)
-	return jobs, err
-}
-
 func (r *Repository) MarkAsRunning(id int64) (*Job, error) {
 	now := time.Now().UnixMilli()
 	result, err := r.db.Exec(
