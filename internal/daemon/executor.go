@@ -130,11 +130,9 @@ func (e *Executor) ExecuteJob(job *db.Job, trigger TriggerType) {
 
 	// Open the log once and reuse the handle for every write in this run,
 	// instead of opening/closing on each append (which is wasteful when a
-	// chatty script emits thousands of lines). All writes are serialized by
-	// mu, so the handle is never accessed concurrently. The file is 0600:
-	// script output frequently contains secrets, and a world-readable log
-	// would leak them on multi-user machines.
-	logMu := &sync.Mutex{}
+	// chatty script emits thousands of lines). The file is 0600: script
+	// output frequently contains secrets, and a world-readable log would
+	// leak them on multi-user machines.
 	logFile, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		// Fall back to no-op logging rather than aborting the run.
@@ -143,13 +141,24 @@ func (e *Executor) ExecuteJob(job *db.Job, trigger TriggerType) {
 	if logFile != nil {
 		defer logFile.Close()
 	}
-	writeLog := func(content string) {
-		if logFile == nil {
-			return
+
+	// One lock guards the log handle, with two entry points for the two kinds
+	// of content:
+	//   - writeLog: housekeeping lines (run header/footer, TIMEOUT, spawn
+	//     errors). They must land even after the byte cap has cut off script
+	//     output — the CLI's log rendering keys off the footer — and they do
+	//     not count against the cap.
+	//   - writeToLog: script output, subject to the per-run 10 MiB cap.
+	var logMu sync.Mutex
+	writeLocked := func(content string) {
+		if logFile != nil {
+			logFile.WriteString(content)
 		}
+	}
+	writeLog := func(content string) {
 		logMu.Lock()
 		defer logMu.Unlock()
-		logFile.WriteString(content)
+		writeLocked(content)
 	}
 
 	// Write run header
@@ -198,23 +207,22 @@ func (e *Executor) ExecuteJob(job *db.Job, trigger TriggerType) {
 	// Stream output
 	stdout, stderr := proc.OutputPipes()
 
-	var mu sync.Mutex
 	var writtenBytes int64
 	const maxRunBytes = 10 * 1024 * 1024 // 10MB
 	var truncatedPrinted bool
 
 	writeToLog := func(text string) {
-		mu.Lock()
-		defer mu.Unlock()
+		logMu.Lock()
+		defer logMu.Unlock()
 		if writtenBytes > maxRunBytes {
 			if !truncatedPrinted {
 				truncatedPrinted = true
-				writeLog("\n[LOG TRUNCATED: Exceeded 10MB limit]\n")
+				writeLocked("\n[LOG TRUNCATED: Exceeded 10MB limit]\n")
 			}
 			return
 		}
 		writtenBytes += int64(len(text))
-		writeLog(text)
+		writeLocked(text)
 	}
 
 	// Stream stdout and stderr concurrently
