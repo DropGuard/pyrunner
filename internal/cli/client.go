@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"time"
 
 	apperrors "github.com/DropGuard/pyrunner/internal/errors"
@@ -65,6 +67,14 @@ func (c *Client) do(method, path string, body interface{}) (*apperrors.APIRespon
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
+		// Distinguish "nothing listening" from "listening but wedged". The
+		// client timeout exists precisely so a hung daemon surfaces clearly —
+		// reporting it as "not running" would send the user off to start a
+		// second daemon on top of the wedged one.
+		var urlErr *url.Error
+		if errors.As(err, &urlErr) && urlErr.Timeout() {
+			return nil, fmt.Errorf("PyRunner daemon did not respond within %s; it may be hung — try restarting it ('pyrunner stop', or kill the pyrunnerd process)", clientTimeout)
+		}
 		return nil, &apperrors.DaemonOfflineError{}
 	}
 	defer resp.Body.Close()
