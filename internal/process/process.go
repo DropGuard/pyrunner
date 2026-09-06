@@ -1,12 +1,18 @@
 package process
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 )
+
+// ErrScriptNotFound reports that the script path passed to Spawn does not
+// exist. Callers (the executor) match it with errors.Is to record the more
+// precise missing_script status instead of a generic failure.
+var ErrScriptNotFound = errors.New("script not found")
 
 // Job represents a running process for a scheduled job.
 type Job struct {
@@ -19,8 +25,11 @@ type Job struct {
 
 // Spawn starts a Python script via `uv run` and returns the running process.
 func Spawn(scriptPath string) (*Job, error) {
-	if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
-		return nil, fmt.Errorf("script not found: %s", scriptPath)
+	if _, err := os.Stat(scriptPath); err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("%w: %s", ErrScriptNotFound, scriptPath)
+		}
+		return nil, fmt.Errorf("check script %s: %w", scriptPath, err)
 	}
 
 	cmd := exec.Command("uv", "run", scriptPath)

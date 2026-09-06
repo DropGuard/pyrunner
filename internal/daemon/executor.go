@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -162,7 +163,13 @@ func (e *Executor) ExecuteJob(job *db.Job, trigger TriggerType) {
 	if err != nil {
 		fmt.Printf("Failed to spawn job %s: %v\n", job.Name, err)
 		nextRun := e.calcNextRun(job, trigger.advancesNextRun(), startTime)
-		e.repo.Finalize(job.ID, -1, nextRun, db.JobStatusFailed)
+		status := db.JobStatusFailed
+		if errors.Is(err, process.ErrScriptNotFound) {
+			// Distinguish "the configured entrypoint is gone" from a generic
+			// spawn failure so the task list can show the actionable state.
+			status = db.JobStatusMissingScript
+		}
+		e.repo.Finalize(job.ID, -1, nextRun, status)
 		writeLog(fmt.Sprintf("\nERROR: Failed to spawn: %v\n", err))
 		return
 	}
