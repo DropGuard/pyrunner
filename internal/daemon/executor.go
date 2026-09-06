@@ -12,6 +12,13 @@ import (
 	"github.com/DropGuard/pyrunner/internal/process"
 )
 
+// pipeDrainGrace bounds how long the executor keeps draining a job's output
+// pipes after the main process has been reaped. It only elapses when a
+// grandchild inherited the pipes and outlived the script; in the normal case
+// EOF arrives the instant the child exits. The grace keeps such runs bounded
+// while still giving any straggler output a fair chance to land.
+const pipeDrainGrace = 2 * time.Second
+
 type Executor struct {
 	repo   *db.Repository
 	config interface {
@@ -176,15 +183,7 @@ func (e *Executor) ExecuteJob(job *db.Job, trigger TriggerType) {
 	}()
 
 	// Stream output
-	stdout, stderr, err := proc.OutputPipes()
-	if err != nil {
-		fmt.Printf("Failed to get pipes for %s: %v\n", job.Name, err)
-		writeLog(fmt.Sprintf("\nERROR: Failed to get output pipes: %v\n", err))
-		close(timeoutDone)
-		nextRun := e.calcNextRun(job, trigger.advancesNextRun(), startTime)
-		e.repo.Finalize(job.ID, -1, nextRun, db.JobStatusFailed)
-		return
-	}
+	stdout, stderr := proc.OutputPipes()
 
 	var mu sync.Mutex
 	var writtenBytes int64
@@ -217,9 +216,40 @@ func (e *Executor) ExecuteJob(job *db.Job, trigger TriggerType) {
 		e.streamToLog(stderr, writeToLog)
 	}()
 
-	// Wait for process exit
-	exitCode, waitErr := proc.Wait()
-	wg.Wait()
+	// Reap the process while the readers drain the pipes. The readers reach
+	// EOF only once every write end is closed — the child's at exit, and (in
+	// the normal case) nothing else holds them, so EOF lands within moments of
+	// the exit. Waiting concurrently (instead of reaping first) is what makes
+	// the capture lossless: os/exec closes StdoutPipe read ends during Wait,
+	// so reaping before the readers finish races them and can discard the
+	// tail of the script's output — the most interesting part, e.g. the final
+	// error line.
+	waitDone := make(chan struct{})
+	var exitCode int
+	var waitErr error
+	go func() {
+		exitCode, waitErr = proc.Wait()
+		close(waitDone)
+	}()
+
+	drained := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(drained)
+	}()
+
+	<-waitDone
+	select {
+	case <-drained:
+		// All output captured.
+	case <-time.After(pipeDrainGrace):
+		// The main process is gone but the pipes are still open: a grandchild
+		// inherited the write ends and outlived the script. The run's output
+		// is complete by definition, so stop waiting on the orphan — force-
+		// close the read ends to unblock the readers, then wait for them.
+		proc.ClosePipes()
+		<-drained
+	}
 	close(timeoutDone)
 
 	if waitErr != nil {
