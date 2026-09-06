@@ -171,12 +171,16 @@ func (e *Executor) ExecuteJob(job *db.Job, trigger TriggerType) {
 			// spawn failure so the task list can show the actionable state.
 			status = db.JobStatusMissingScript
 		}
-		e.repo.Finalize(job.ID, -1, nextRun, status)
+		if err := e.repo.Finalize(job.ID, -1, nextRun, status); err != nil {
+			fmt.Printf("Job %s: failed to finalize: %v\n", job.Name, err)
+		}
 		writeLog(fmt.Sprintf("\nERROR: Failed to spawn: %v\n", err))
 		return
 	}
 
-	e.repo.UpdatePID(job.ID, proc.PID)
+	if err := e.repo.UpdatePID(job.ID, proc.PID); err != nil {
+		fmt.Printf("Job %s: failed to record pid: %v\n", job.Name, err)
+	}
 
 	// Timeout
 	timeoutDone := make(chan struct{})
@@ -268,7 +272,12 @@ func (e *Executor) ExecuteJob(job *db.Job, trigger TriggerType) {
 	// Finalize
 	nextRun := e.calcNextRun(job, trigger.advancesNextRun(), startTime)
 	duration := time.Since(startTime).Seconds()
-	e.repo.Finalize(job.ID, exitCode, nextRun, db.JobStatusIdle)
+	if err := e.repo.Finalize(job.ID, exitCode, nextRun, db.JobStatusIdle); err != nil {
+		// A failed Finalize leaves the row "running" until the next daemon
+		// start reaps it — surface it loudly, since every further trigger of
+		// this job is rejected while the row looks busy.
+		fmt.Printf("Job %s: failed to finalize: %v\n", job.Name, err)
+	}
 
 	status := "Success"
 	if exitCode != 0 {

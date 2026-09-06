@@ -1,7 +1,9 @@
 package daemon
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -111,13 +113,35 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDaemonStatus(w http.ResponseWriter, r *http.Request) {
-	jobs, _ := s.repo.GetAll()
+	jobs, err := s.repo.GetAll()
+	if err != nil {
+		writeErr(w, 500, apperrors.ErrInternal, err.Error())
+		return
+	}
 	writeOK(w, map[string]interface{}{
 		"pid":      os.Getpid(),
 		"ipc":      s.config.GetDaemonIpcPath(),
 		"jobCount": len(jobs),
 		"uptime":   time.Since(s.startTime).Seconds(),
 	})
+}
+
+// getJobOrRespond fetches a job by name, writing the appropriate error
+// response itself when the lookup fails: 404 only for a genuinely missing
+// row, 500 for a database failure (which must not masquerade as "task not
+// found" — that sends users debugging the wrong thing). Returns nil when a
+// response was written.
+func (s *Server) getJobOrRespond(w http.ResponseWriter, name string) *db.Job {
+	job, err := s.repo.GetByName(name)
+	if err == nil {
+		return job
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		writeErr(w, 404, apperrors.ErrJobNotFound, "Task '"+name+"' not found")
+		return nil
+	}
+	writeErr(w, 500, apperrors.ErrInternal, err.Error())
+	return nil
 }
 
 func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
@@ -131,9 +155,8 @@ func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleGetJob(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
-	job, err := s.repo.GetByName(name)
-	if err != nil {
-		writeErr(w, 404, apperrors.ErrJobNotFound, "Task '"+name+"' not found")
+	job := s.getJobOrRespond(w, name)
+	if job == nil {
 		return
 	}
 	writeOK(w, job)
@@ -271,9 +294,8 @@ func (s *Server) handleDeleteJob(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleRunJob(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
-	job, err := s.repo.GetByName(name)
-	if err != nil {
-		writeErr(w, 404, apperrors.ErrJobNotFound, "Task '"+name+"' not found")
+	job := s.getJobOrRespond(w, name)
+	if job == nil {
 		return
 	}
 
@@ -298,9 +320,8 @@ func (s *Server) handleRunJob(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleKillJob(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
-	job, err := s.repo.GetByName(name)
-	if err != nil {
-		writeErr(w, 404, apperrors.ErrJobNotFound, "Task '"+name+"' not found")
+	job := s.getJobOrRespond(w, name)
+	if job == nil {
 		return
 	}
 	if job.Status != db.JobStatusRunning || job.PID == nil {
@@ -319,7 +340,11 @@ func (s *Server) handleKillJob(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleKillAll(w http.ResponseWriter, r *http.Request) {
-	jobs, _ := s.repo.GetAll()
+	jobs, err := s.repo.GetAll()
+	if err != nil {
+		writeErr(w, 500, apperrors.ErrInternal, err.Error())
+		return
+	}
 	killed := 0
 	var mu sync.Mutex
 	var wg sync.WaitGroup
@@ -344,9 +369,7 @@ func (s *Server) handleKillAll(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleGetJobLogs(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
-	_, err := s.repo.GetByName(name)
-	if err != nil {
-		writeErr(w, 404, apperrors.ErrJobNotFound, "Task '"+name+"' not found")
+	if s.getJobOrRespond(w, name) == nil {
 		return
 	}
 
@@ -380,7 +403,11 @@ func (s *Server) handleGetJobLogs(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetAllLogs(w http.ResponseWriter, r *http.Request) {
-	jobs, _ := s.repo.GetAll()
+	jobs, err := s.repo.GetAll()
+	if err != nil {
+		writeErr(w, 500, apperrors.ErrInternal, err.Error())
+		return
+	}
 	logs := make(map[string]string)
 	for _, job := range jobs {
 		logPath := filepath.Join(s.config.GetLogsDir(), job.Name+".log")
