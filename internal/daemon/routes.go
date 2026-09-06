@@ -209,10 +209,23 @@ func (s *Server) handleAddJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	job, _ := s.repo.GetByName(req.Name)
-	s.scheduler.Schedule(req.Name, req.Cron, func() {
+	// The scheduled closure captures the persisted row. Persisting can only
+	// be observed here; silently scheduling with a nil job would panic the
+	// cron goroutine at fire time and take the whole daemon down with it.
+	job, err := s.repo.GetByName(req.Name)
+	if err != nil {
+		writeErr(w, 500, apperrors.ErrInternal, "task added but could not be loaded: "+err.Error())
+		return
+	}
+	if err := s.scheduler.Schedule(req.Name, req.Cron, func() {
 		s.executor.ExecuteJob(job, TriggerScheduled)
-	})
+	}); err != nil {
+		// The cron was validated above with the same parser options, so this
+		// is practically unreachable — but a task that is persisted yet never
+		// scheduled must not look like a success.
+		writeErr(w, 500, apperrors.ErrInternal, "task added but could not be scheduled: "+err.Error())
+		return
+	}
 
 	writeJSON(w, 201, apperrors.OK(map[string]interface{}{
 		"name":          req.Name,
@@ -222,9 +235,7 @@ func (s *Server) handleAddJob(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleEditJob(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
-	_, err := s.repo.GetByName(name)
-	if err != nil {
-		writeErr(w, 404, apperrors.ErrJobNotFound, "Task '"+name+"' not found")
+	if s.getJobOrRespond(w, name) == nil {
 		return
 	}
 
@@ -269,10 +280,17 @@ func (s *Server) handleEditJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	updated, _ := s.repo.GetByName(name)
-	s.scheduler.Schedule(updated.Name, updated.Cron, func() {
+	updated, err := s.repo.GetByName(name)
+	if err != nil {
+		writeErr(w, 500, apperrors.ErrInternal, "task updated but could not be reloaded: "+err.Error())
+		return
+	}
+	if err := s.scheduler.Schedule(updated.Name, updated.Cron, func() {
 		s.executor.ExecuteJob(updated, TriggerScheduled)
-	})
+	}); err != nil {
+		writeErr(w, 500, apperrors.ErrInternal, "task updated but could not be re-scheduled: "+err.Error())
+		return
+	}
 
 	writeOK(w, updated)
 }

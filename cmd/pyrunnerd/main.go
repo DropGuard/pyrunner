@@ -166,10 +166,14 @@ func run() int {
 
 	for _, job := range jobs {
 		job := job // capture
-		// Schedule all jobs
-		scheduler.Schedule(job.Name, job.Cron, func() {
+		// Schedule all jobs. A stored cron that fails to parse must not fail
+		// silently — the daemon would report the job as scheduled while it
+		// never fires.
+		if err := scheduler.Schedule(job.Name, job.Cron, func() {
 			executor.ExecuteJob(&job, daemon.TriggerScheduled)
-		})
+		}); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to schedule job %s (cron %q): %v\n", job.Name, job.Cron, err)
+		}
 	}
 
 	// Start HTTP server on the Unix socket (clean stale socket file first).
@@ -196,14 +200,21 @@ func run() int {
 	router := server.Router()
 	httpServer := &http.Server{Handler: router}
 
+	// shutdown runs the teardown exactly once. SIGINT/SIGTERM and the HTTP
+	// /daemon/shutdown endpoint can race (e.g. `pyrunner stop` while the user
+	// hits Ctrl-C); a second close of done would panic, so the once guards
+	// every teardown step.
+	var shutdownOnce sync.Once
 	shutdown := func() {
-		fmt.Println("Shutting down...")
-		// Stop cron scheduling first, then kill any in-flight jobs so no
-		// child process is left orphaned when the daemon exits.
-		scheduler.StopAll()
-		killRunningJobs(repo, realProcessKiller{})
-		httpServer.Close()
-		close(done)
+		shutdownOnce.Do(func() {
+			fmt.Println("Shutting down...")
+			// Stop cron scheduling first, then kill any in-flight jobs so no
+			// child process is left orphaned when the daemon exits.
+			scheduler.StopAll()
+			killRunningJobs(repo, realProcessKiller{})
+			httpServer.Close()
+			close(done)
+		})
 	}
 	server.SetShutdown(shutdown)
 
