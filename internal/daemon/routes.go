@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -307,7 +308,10 @@ func (s *Server) handleKillJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := process.KillTree(*job.PID, true); err != nil {
+	// Graceful: SIGTERM first, escalating to SIGKILL after a short grace
+	// period, so a script gets the chance to flush and clean up. Killing a
+	// tree that has already exited is treated as success.
+	if err := process.KillTree(*job.PID, false); err != nil {
 		writeErr(w, 500, apperrors.ErrInternal, "Failed to kill task: "+err.Error())
 		return
 	}
@@ -317,13 +321,24 @@ func (s *Server) handleKillJob(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleKillAll(w http.ResponseWriter, r *http.Request) {
 	jobs, _ := s.repo.GetAll()
 	killed := 0
+	var mu sync.Mutex
+	var wg sync.WaitGroup
 	for _, job := range jobs {
 		if job.Status == db.JobStatusRunning && job.PID != nil {
-			if err := process.KillTree(*job.PID, true); err == nil {
-				killed++
-			}
+			wg.Add(1)
+			go func(pid int) {
+				defer wg.Done()
+				// Concurrent graceful kills: each carries its own
+				// TERM→KILL grace delay, which must not serialize.
+				if err := process.KillTree(pid, false); err == nil {
+					mu.Lock()
+					killed++
+					mu.Unlock()
+				}
+			}(*job.PID)
 		}
 	}
+	wg.Wait()
 	writeOK(w, map[string]int{"killed": killed})
 }
 

@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
@@ -29,8 +30,8 @@ func (realProcessKiller) KillTree(pid int, force bool) error {
 	return process.KillTree(pid, force)
 }
 
-// killRunningJobs SIGKILLs every process tree the DB currently marks running.
-// It is called in two places with opposite but complementary intents:
+// killRunningJobs terminates every process tree the DB currently marks
+// running. It is called in two places with opposite but complementary intents:
 //
 //   - daemon shutdown: so stopping the scheduler never strands Python scripts
 //     in the background;
@@ -39,22 +40,34 @@ func (realProcessKiller) KillTree(pid int, force bool) error {
 //     resetting first would let the scheduler re-trigger a job whose previous
 //     process is still alive, and the two runs would race on the same log file.
 //
+// Kills are graceful (SIGTERM, escalating to SIGKILL after a short grace
+// period) so scripts get a chance to flush and clean up, and they run
+// concurrently because each graceful kill carries its own escalation delay —
+// serializing them would multiply shutdown time by the number of running jobs.
+//
 // A gracefully-stopped daemon also leaves rows here occasionally: executor
 // goroutines may not have Finalized before the database closed, while the
-// shutdown path already SIGKILLed the processes. KillTree on those yields
-// ESRCH, which is treated as success — nothing left to kill.
+// shutdown path already killed the processes. KillTree on those yields ESRCH,
+// which is treated as success — nothing left to kill.
 func killRunningJobs(repo *db.Repository, killer processKiller) {
 	jobs, err := repo.GetAll()
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to list running jobs for cleanup: %v\n", err)
 		return
 	}
+	var wg sync.WaitGroup
 	for _, job := range jobs {
 		if job.Status == db.JobStatusRunning && job.PID != nil {
-			if err := killer.KillTree(*job.PID, true); err == nil {
-				fmt.Printf("Killed running job %s (pid %d)\n", job.Name, *job.PID)
-			}
+			wg.Add(1)
+			go func(pid int, name string) {
+				defer wg.Done()
+				if err := killer.KillTree(pid, false); err == nil {
+					fmt.Printf("Killed running job %s (pid %d)\n", name, pid)
+				}
+			}(*job.PID, job.Name)
 		}
 	}
+	wg.Wait()
 }
 
 // cleanupStaleRunningJobs reaps orphaned process trees left by a crashed
