@@ -15,6 +15,10 @@ const https = require("https");
 const VERSION = require("./package.json").version;
 const BASE_URL = `https://github.com/DropGuard/pyrunner/releases/download/v${VERSION}`;
 const INSTALL_DIR = path.join(os.homedir(), ".pyrunner", "bin");
+// Records which PyRunner version the binaries in INSTALL_DIR came from.
+// Without it, an `npm i -g @dropguard/pyrunner@<newer>` would keep silently
+// running the old binaries forever, since they already exist on disk.
+const VERSION_MARKER = path.join(INSTALL_DIR, ".pyrunner-version");
 
 function getPlatform() {
   const platform = os.platform();
@@ -84,7 +88,7 @@ async function ensureBinaries() {
   const cliPath = path.join(INSTALL_DIR, cliName);
   const daemonPath = path.join(INSTALL_DIR, daemonName);
 
-  if (fs.existsSync(cliPath) && fs.existsSync(daemonPath)) {
+  if (fs.existsSync(cliPath) && fs.existsSync(daemonPath) && installedVersion() === VERSION) {
     return { cliPath, daemonPath };
   }
 
@@ -118,10 +122,22 @@ async function ensureBinaries() {
     fs.chmodSync(daemonPath, 0o755);
   }
 
+  // Record the installed version only after the binaries are in place, so an
+  // interrupted download/extract never looks like a successful install.
+  fs.writeFileSync(VERSION_MARKER, VERSION + "\n");
+
   // Cleanup
   fs.unlinkSync(archivePath);
 
   return { cliPath, daemonPath };
+}
+
+function installedVersion() {
+  try {
+    return fs.readFileSync(VERSION_MARKER, "utf8").trim();
+  } catch {
+    return null;
+  }
 }
 
 async function main() {
