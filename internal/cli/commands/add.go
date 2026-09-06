@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 
 	"github.com/spf13/cobra"
+
+	"github.com/DropGuard/pyrunner/internal/db"
 )
 
 const defaultCron = "0 12 * * *"
@@ -55,6 +57,16 @@ func addRemote(url, cron string) error {
 	name := RepoNameFromURL(url)
 	if name == "" {
 		return fmt.Errorf("could not determine repo name from %q", url)
+	}
+
+	// The name becomes a directory under ReposDir and the target of this
+	// function's failure cleanup (os.RemoveAll), so it must be validated
+	// BEFORE any filesystem action. A URL like https://host/owner/repo/..
+	// derives the name ".." — RepoNameFromURL happily returns it, and without
+	// this check the cleanup below would resolve to ~/.pyrunner itself and
+	// delete the entire PyRunner state directory (database, logs, repos).
+	if err := db.ValidateTaskName(name); err != nil {
+		return fmt.Errorf("cannot derive a safe task name from %q: %w", url, err)
 	}
 
 	// Fail before touching disk if the daemon isn't reachable.

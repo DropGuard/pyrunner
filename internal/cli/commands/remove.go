@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 
 	"github.com/spf13/cobra"
+
+	"github.com/DropGuard/pyrunner/internal/db"
 )
 
 func newRemoveCmd() *cobra.Command {
@@ -19,8 +21,13 @@ func newRemoveCmd() *cobra.Command {
 				return err
 			}
 			// Best-effort cleanup of the cloned snapshot for git-sourced tasks,
-			// so remove + re-add fetches a fresh copy.
-			os.RemoveAll(filepath.Join(cfg.ReposDir, args[0]))
+			// so remove + re-add fetches a fresh copy. Guarded by the same
+			// validation the daemon applies at add time: this RemoveAll must
+			// never reach outside ReposDir, even for a row created before task
+			// names were validated.
+			if db.ValidateTaskName(args[0]) == nil {
+				os.RemoveAll(filepath.Join(cfg.ReposDir, args[0]))
+			}
 			printSuccess(fmt.Sprintf("Task '%s' removed", args[0]))
 			return nil
 		},
