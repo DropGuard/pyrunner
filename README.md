@@ -18,7 +18,7 @@ You point it at a script (or a Git repo), pick a schedule, and forget about it. 
 - **System service (user-level)** — runs as the logged-in user; writes only to `~/.pyrunner`. Auto-start on login: Linux (XDG `.desktop`), Windows (Registry `HKCU\…\Run`), macOS (LaunchAgent `~/Library/LaunchAgents/com.dropguard.pyrunner.plist`).
 - **Process management** — graceful SIGTERM → SIGKILL, process-tree cleanup, per-job timeout.
 - **Strict UTF-8** — `PYTHONUTF8=1` and `PYTHONIOENCODING=utf-8` are always set on children.
-- **Tight permissions** — `~/.pyrunner` is `0700` and SQLite files are `0600` (multi-user safe).
+- **Tight permissions** — `~/.pyrunner` is `0700`, logs and cloned repos are only readable by your user, and SQLite files are `0600` (multi-user safe).
 - **Schedule from Git** — point `add` at a repo URL and PyRunner clones it for you.
 
 ---

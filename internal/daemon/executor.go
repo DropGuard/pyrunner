@@ -131,9 +131,11 @@ func (e *Executor) ExecuteJob(job *db.Job, trigger TriggerType) {
 	// Open the log once and reuse the handle for every write in this run,
 	// instead of opening/closing on each append (which is wasteful when a
 	// chatty script emits thousands of lines). All writes are serialized by
-	// mu, so the handle is never accessed concurrently.
+	// mu, so the handle is never accessed concurrently. The file is 0600:
+	// script output frequently contains secrets, and a world-readable log
+	// would leak them on multi-user machines.
 	logMu := &sync.Mutex{}
-	logFile, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	logFile, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		// Fall back to no-op logging rather than aborting the run.
 		fmt.Printf("Failed to open log %s: %v\n", logPath, err)

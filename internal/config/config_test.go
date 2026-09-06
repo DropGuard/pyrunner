@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -56,6 +57,30 @@ func TestEnsureEnv(t *testing.T) {
 		info, err := os.Stat(dir)
 		require.NoError(t, err, "EnsureEnv should create %s", dir)
 		assert.True(t, info.IsDir(), "%s should be a directory", dir)
+	}
+}
+
+// TestEnsureEnvTightensPermissions verifies the permission contract of
+// EnsureEnv: after it runs, logs/ and repos/ are never group/other
+// accessible, whatever mode they had before. Script output can contain
+// secrets and cloned repos private code, so 0700 is part of the contract,
+// not a creation-time default.
+func TestEnsureEnvTightensPermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix permission semantics")
+	}
+	base := t.TempDir()
+	cfg := ForTest(base)
+
+	// Pre-create logs/ loose (0755), the shape an older version leaves behind.
+	require.NoError(t, os.MkdirAll(cfg.LogsDir, 0o755))
+
+	require.NoError(t, cfg.EnsureEnv())
+
+	for _, dir := range []string{cfg.LogsDir, cfg.ReposDir} {
+		info, err := os.Stat(dir)
+		require.NoError(t, err)
+		assert.Zero(t, info.Mode().Perm()&0o077, "%s must not be group/other accessible", dir)
 	}
 }
 
