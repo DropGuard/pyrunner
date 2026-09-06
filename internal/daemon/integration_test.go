@@ -89,6 +89,13 @@ func TestDaemonIntegration(t *testing.T) {
 	_, err = testClient.GetJobLogs("test-job", 0)
 	require.NoError(t, err)
 
+	// Test -n line counting: the trailing newline must not surface as an
+	// extra empty line, so "-n 1" shows the last real line.
+	require.NoError(t, os.WriteFile(filepath.Join(cfg.LogsDir, "test-job.log"), []byte("first\nsecond\n"), 0o600))
+	logs, err := testClient.GetJobLogs("test-job", 1)
+	require.NoError(t, err)
+	assert.Equal(t, "second", logs, "-n 1 should show the last real line, not the trailing newline")
+
 	// Test remove job
 	require.NoError(t, testClient.RemoveJob("test-job"))
 

@@ -408,7 +408,9 @@ func (s *Server) handleGetJobLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if lines > 0 {
-		allLines := strings.Split(string(content), "\n")
+		// Drop the final newline before splitting so it doesn't count as an
+		// extra (empty) last line — `logs -n 1` must show the last real line.
+		allLines := strings.Split(strings.TrimSuffix(string(content), "\n"), "\n")
 		if lines > len(allLines) {
 			lines = len(allLines)
 		}
